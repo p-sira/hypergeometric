@@ -1,5 +1,6 @@
 //! Confluent limit function, compensated and double-double power series.
-use crate::dd::Dd;
+use crate::{dd::Dd, gamma};
+use core::f64::consts::PI;
 type StrErr = &'static str;
 const ERROR: StrErr = "0F1 arguments must be finite; parameter cannot be a nonpositive integer";
 fn validate(v: f64) -> Result<(), StrErr> {
@@ -15,7 +16,8 @@ fn validate(v: f64) -> Result<(), StrErr> {
 /// roundoff estimate; ordinary scalar evaluation keeps its existing thresholds.
 pub(super) fn series_real<const FULL_PRECISION: bool>(v: f64, z: f64) -> Option<Dd> {
     let norm = z.abs();
-    if norm > 100.0 && !(v > 0.0 && norm / v < 16.0) {
+    if norm > 100.0 && !(v > 0.0 && norm / v < 32.0) && !(v < 0.0 && norm <= 10000.0 && v > -2500.0)
+    {
         return None;
     }
     let mut real = Dd::from(1.0);
@@ -91,6 +93,119 @@ fn compensated_series(v: f64, z: f64) -> Option<f64> {
     None
 }
 
+// The defining 0F1 series has only positive terms when b,z>0. Summing in
+// logarithmic form avoids both premature term overflow and underflow of the
+// normalized large-order modified Bessel I. This path is used only when the
+// faster compensated/double-double sums cannot certify their result.
+fn positive_log_series(b: f64, z: f64) -> Option<f64> {
+    if b <= 0.0 || z <= 0.0 {
+        return None;
+    }
+    let mut log_term: f64 = 0.0;
+    let mut log_sum: f64 = 0.0;
+    let log_z = z.ln();
+    for k in 1..=16384 {
+        let kf = k as f64;
+        let next_b = b + (kf - 1.0);
+        if !next_b.is_finite() {
+            return Some(log_sum.exp());
+        }
+        log_term += log_z - next_b.ln() - kf.ln();
+        if log_term == f64::NEG_INFINITY {
+            return Some(log_sum.exp());
+        }
+        let largest = log_sum.max(log_term);
+        log_sum = largest + ((log_sum - largest).exp() + (log_term - largest).exp()).ln();
+        if log_sum > f64::MAX.ln() {
+            return Some(f64::INFINITY);
+        }
+        if z / ((b + kf) * (kf + 1.0)) < 0.5 && log_term < log_sum - 38.0 {
+            return Some(log_sum.exp());
+        }
+    }
+    None
+}
+
+// Reflection at b<0 must retain the exact binary64 distance to the nearest
+// gamma pole. Directly evaluating sin(pi*b) loses that distance near -n.
+fn signed_log_gamma(b: f64) -> (f64, f64) {
+    if b > 0.0 {
+        return gamma::lgamma_sign(b);
+    }
+    let nearest = b.round();
+    let sine = (PI * (b - nearest)).sin();
+    let sign = if nearest % 2.0 == 0.0 {
+        sine.signum()
+    } else {
+        -sine.signum()
+    };
+    let lgamma = PI.ln() - sine.abs().ln() - gamma::lgamma_sign(1.0 - b).0;
+    (lgamma, sign)
+}
+
+// Uniform Debye expansion of normalized J_(b-1) for large positive b
+// and 2*sqrt(-z) < (b-1)/sqrt(2). The regular Bessel J underflows in
+// this regime even when 0F1 is ordinary-sized (e.g. b=100000,z=-1e7).
+// Stirling cancellation is performed analytically, using log1p for the
+// small exponent difference. DLMF 10.19.3, 10.41.7 and 5.11.1.
+fn large_order_negative(b: f64, z: f64) -> Option<f64> {
+    if b < 500.0 || z >= 0.0 {
+        return None;
+    }
+    let nu = b - 1.0;
+    let q = (2.0 * (-z).sqrt() / nu).powi(2);
+    let limit = if b >= 1000.0 { 0.5 } else { 0.25 };
+    if q >= limit {
+        return None;
+    }
+    let s = (1.0 - q).sqrt();
+    let d = -q / (1.0 + s);
+    let p = 1.0 / s;
+    let p2 = p * p;
+    let p3 = p2 * p;
+    let p4 = p2 * p2;
+    let p5 = p4 * p;
+    let p6 = p3 * p3;
+    let p7 = p6 * p;
+    let p9 = p7 * p2;
+    let u1 = (3.0 * p - 5.0 * p3) / 24.0;
+    let u2 = (81.0 * p2 - 462.0 * p4 + 385.0 * p6) / 1152.0;
+    let u3 = (30375.0 * p3 - 369603.0 * p5 + 765765.0 * p7 - 425425.0 * p9) / 414720.0;
+    let correction = 1.0 / (12.0 * nu) - 1.0 / (360.0 * nu.powi(3));
+    let exponent = nu * (d - (d / 2.0).ln_1p()) - 0.5 * s.ln()
+        + correction
+        + (u1 / nu + u2 / nu.powi(2) + u3 / nu.powi(3)).ln_1p();
+    Some(exponent.exp())
+}
+
+// DLMF 10.39.9 / 10.27.6:
+//   0F1(;b; z) = Gamma(b) * |z|^((1-b)/2) * Bessel_(b-1)(2 sqrt|z|),
+// with Bessel=J for z<0, I for z>0. Evaluate the exponential factors in
+// logarithmic form and use exp(-t) I_v(t) for positive z.
+fn bessel_continuation(b: f64, z: f64) -> Option<f64> {
+    let order = b - 1.0;
+    if order == b {
+        return None;
+    }
+    let root = z.abs().sqrt();
+    let t = 2.0 * root;
+    let basis = if z < 0.0 {
+        bessel::jv(order, t)
+    } else {
+        bessel::ive(order, t)
+    };
+    if !basis.is_finite() || basis == 0.0 {
+        return None;
+    }
+    let (gamma_log, gamma_sign) = signed_log_gamma(b);
+    let exponent =
+        gamma_log + (1.0 - b) * root.ln() + basis.abs().ln() + if z > 0.0 { t } else { 0.0 };
+    if exponent.is_nan() {
+        return None;
+    }
+    Some(gamma_sign * basis.signum() * exponent.exp())
+}
+
 fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
     validate(v)?;
     if !z.is_finite() {
@@ -125,7 +240,16 @@ fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
     }
     if v == 1.5 {
         let t = 2.0 * z.abs().sqrt();
-        return Ok(if z > 0.0 { t.sinh() / t } else { t.sin() / t });
+        return Ok(if z > 0.0 {
+            if t > 700.0 {
+                // sinh(t) overflows before sinh(t)/t does.
+                (t - (2.0 * t).ln()).exp()
+            } else {
+                t.sinh() / t
+            }
+        } else {
+            t.sin() / t
+        });
     }
     if v == -0.5 {
         let t = 2.0 * z.abs().sqrt();
@@ -145,10 +269,16 @@ fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
     if let Some(value) = series_real::<false>(v, z) {
         return Ok(value.hi);
     }
-    // The Bessel fallback in sci-special was deliberately not transferred:
-    // this self-contained crate reports unsupported cancellation/argument
-    // regions explicitly rather than importing a cyclic backend dependency.
-    Err("0F1 cannot be resolved accurately by the bounded real series")
+    if let Some(value) = positive_log_series(v, z) {
+        return Ok(value);
+    }
+    if let Some(value) = large_order_negative(v, z) {
+        return Ok(value);
+    }
+    if let Some(value) = bessel_continuation(v, z) {
+        return Ok(value);
+    }
+    Err("0F1 cannot be resolved accurately by the bounded real series or Bessel continuation")
 }
 
 /// Real 0F1(;v;z), NaN for poles and unresolved cancellation.

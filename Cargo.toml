@@ -13,3 +13,4 @@ categories = ["mathematics", "science"]
 include = ["src/**", "LICENSE", "LICENSES/**", "README.md"]
 
 [dependencies]
+bessel = { version = "0.1.0", path = "../bessel" }

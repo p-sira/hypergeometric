@@ -22,11 +22,40 @@ mod one_f_one;
 mod specfun;
 mod zero_f_one;
 
-/// Confluent limit function 0F1(;b;z) = Σ_{k≥0} z^k / ((b)_k k!).
+/// Real confluent limit function 0F1(;b;z) = Σ_{k≥0} z^k / ((b)_k k!).
 ///
-/// Requires finite real inputs, b not a nonpositive integer. Uses bounded
-/// compensated and double-double series; unresolved large arguments yield NaN.
-/// Reference: DLMF [16.2](https://dlmf.nist.gov/16.2).
+/// # Parameters and domain
+/// `b` is the dimensionless lower parameter and `z` the real argument.
+/// Both must be finite. For `b = 0,-1,-2,…`, the function has a pole and
+/// this API returns NaN. In particular `hyp0f1(b,0) = 1` for valid `b`.
+///
+/// # Numerical behavior
+/// Compensated and double-double power series cover the moderate range and
+/// near-parameter-pole regions. Larger arguments use the real Bessel
+/// identities `Γ(b)|z|^((1-b)/2) J_(b-1)(2√|z|)` for negative `z`, and
+/// the corresponding modified Bessel `I` for positive `z` with exponential
+/// scaling. A positive-term logarithmic series prevents overflow/underflow of
+/// intermediate values for `b,z>0`. Large positive `b` with negative `z`
+/// also uses a uniform large-order expansion when `J` underflows.
+///
+/// Can return signed infinities when the mathematical value exceeds binary64
+/// range; a bounded method can still return NaN in unresolved extreme or
+/// highly oscillatory regions, particularly close to Bessel zeros.
+/// Near zeros, relative error can grow even when absolute error is small.
+/// Work is bounded to 16,384 logarithmic-series terms and 4,096 double-double
+/// terms. No complex analytic continuation is provided.
+///
+/// # Example
+/// ```
+/// use hypergeometric::hyp0f1;
+/// assert_eq!(hyp0f1(0.5, 0.0), 1.0);
+/// assert!((hyp0f1(0.5, -1.0) - 2.0_f64.cos()).abs() < 1e-14);
+/// assert!(hyp0f1(0.0, -1.0).is_nan());
+/// ```
+///
+/// References: DLMF [16.2](https://dlmf.nist.gov/16.2),
+/// [10.39](https://dlmf.nist.gov/10.39),
+/// [10.19](https://dlmf.nist.gov/10.19).
 pub fn hyp0f1(b: f64, z: f64) -> f64 {
     zero_f_one::hyp0f1(b, z)
 }
