@@ -40,17 +40,14 @@ fn original_sci_inventory_against_independent_scipy() {
             "hyp2f1" => 5e-9,
             _ => 1e-10,
         };
-        let abs = match api {
-            "hyperu" => 1e-11,
-            "hyp1f1" => 2e-10,
-            _ => 1e-12,
-        };
         let valid = if want.is_nan() {
             got.is_nan()
         } else if want.is_infinite() {
             got == want
+        } else if want == 0.0 {
+            got == 0.0
         } else {
-            (got - want).abs() <= abs + rel * want.abs()
+            (got - want).abs() <= rel * want.abs()
         };
         if !valid {
             failures.push(format!(
@@ -68,7 +65,7 @@ fn original_sci_inventory_against_independent_scipy() {
         failures.len(),
         failures
             .iter()
-            .take(65)
+            .take(90)
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")

@@ -13,7 +13,7 @@ fn binary64_benchmark_120_digit_series() {
         let (a, b, z, want) = (row[0], row[1], row[2], row[3]);
         let got = hyp1f1(a, b, z);
         assert!(
-            (got - want).abs() <= 3e-13 * want.abs().max(1e-15),
+            (got - want).abs() <= 3e-13 * want.abs(),
             "case {i}, ({a},{b},{z}): got {got}, reference {want}"
         );
         count += 1;
@@ -33,7 +33,7 @@ fn cancellation_100_digit_series_and_scipy_comparison() {
         let row: Vec<_> = row.split(',').map(|v| v.parse::<f64>().unwrap()).collect();
         let (a, b, z, want) = (row[0], row[1], row[2], row[3]);
         let got = hyp1f1(a, b, z);
-        if (got - want).abs() > 2e-10 * want.abs().max(1e-15) {
+        if (got - want).abs() > 2e-10 * want.abs() {
             misses.push(format!(
                 "{i}, ({a},{b},{z}): got {got}, reference {want}, ratio {}",
                 got / want

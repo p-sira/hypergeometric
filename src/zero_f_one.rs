@@ -103,8 +103,25 @@ fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
     // functions. These identities remain stable at zeros where the general
     // alternating series cannot certify any relative accuracy.
     if v == 0.5 {
-        let t = 2.0 * z.abs().sqrt();
-        return Ok(if z > 0.0 { t.cosh() } else { t.cos() });
+        let root = z.abs().sqrt();
+        let t = 2.0 * root;
+        return Ok(if z > 0.0 {
+            t.cosh()
+        } else {
+            // Near a cosine zero, rounding sqrt(-z) before evaluating cos
+            // loses the entire result. Recover the low part of the root via
+            // (-z) - root², computed with fused multiply-add, and correct
+            // cos to first order. The omitted term is O(ulp(root)²).
+            let root_correction = (-root).mul_add(root, -z) / root;
+            // At enormous |z| the spacing between successive f64 roots is
+            // larger than a radian, so a linear phase correction is invalid.
+            // Return the bounded trigonometric value in that regime.
+            if root_correction.abs() <= 0.125 {
+                t.cos() - t.sin() * root_correction
+            } else {
+                t.cos()
+            }
+        });
     }
     if v == 1.5 {
         let t = 2.0 * z.abs().sqrt();

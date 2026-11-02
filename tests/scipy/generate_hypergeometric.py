@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.13"
+# dependencies = ["numpy==2.5.4", "scipy==1.18.1"]
+# ///
 """Rebuild independent SciPy expected results from the committed input CSV.
 
 Requires Python 3.13, scipy==1.18.1, numpy==2.5.4. The computation imports
