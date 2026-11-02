@@ -1,0 +1,15 @@
+[package]
+name = "hypergeometric"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Sira Pornsiriprasert"]
+license = "BSD-3-Clause"
+description = "Pure Rust real hypergeometric and Wright special functions"
+readme = "README.md"
+documentation = "https://docs.rs/hypergeometric"
+keywords = ["hypergeometric", "wright", "special-functions", "numerics", "math"]
+categories = ["mathematics", "science"]
+include = ["src/**", "LICENSE", "LICENSES/**", "README.md"]
+
+[dependencies]
