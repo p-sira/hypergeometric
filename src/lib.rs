@@ -1,18 +1,21 @@
 //! Real hypergeometric and Wright functions in pure Rust.
 //!
-//! Functions return `f64::NAN` for invalid arguments or numerical regions where
+//! Functions return NaN for invalid arguments or numerical regions where
 //! a bounded calculation cannot reliably resolve the real value. See individual
-//! APIs and README for documented work limits. All functions use f64.
+//! APIs and README for documented work limits. `hyp0f1` and `wrightomega`
+//! accept `f32` and `f64` through `num_traits::Float`, evaluate in `f64`, and
+//! convert the result back to the input type. Other functions use `f64`.
 //!
 //! # Example
 //! ```
 //! use hypergeometric::{hyp0f1, hyp1f1, hyp2f1, hyperu, wright_bessel, wrightomega};
-//! assert!((hyp0f1(2.5, 0.0)-1.0).abs() < 1e-14);
+//! assert!((hyp0f1(2.5_f64, 0.0)-1.0).abs() < 1e-14);
 //! assert!((hyp1f1(1.0, 1.0, 0.5)-0.5_f64.exp()).abs() < 1e-14);
 //! assert!((hyp2f1(1.0, 1.0, 2.0, 0.5)-2.0*2.0_f64.ln()).abs() < 1e-12);
 //! assert!((hyperu(0.0, 2.5, 1.0)-1.0).abs() < 1e-14);
 //! assert!(wright_bessel(0.5, 1.5, 1.0).is_finite());
-//! assert!((wrightomega(1.0)+wrightomega(1.0).ln()-1.0).abs()<1e-13);
+//! let w: f64 = wrightomega(1.0);
+//! assert!((w+w.ln()-1.0).abs()<1e-13);
 //! ```
 #![allow(clippy::excessive_precision)]
 mod dd;
@@ -43,21 +46,25 @@ mod zero_f_one;
 /// highly oscillatory regions, particularly close to Bessel zeros.
 /// Near zeros, relative error can grow even when absolute error is small.
 /// Work is bounded to 16,384 logarithmic-series terms and 4,096 double-double
-/// terms. No complex analytic continuation is provided.
+/// terms. No complex analytic continuation is provided. Accepts
+/// `num_traits::Float` (including `f32` and `f64`), computes in `f64`, and
+/// converts the result to `T`; this does not provide additional precision.
 ///
 /// # Example
 /// ```
 /// use hypergeometric::hyp0f1;
 /// assert_eq!(hyp0f1(0.5, 0.0), 1.0);
 /// assert!((hyp0f1(0.5, -1.0) - 2.0_f64.cos()).abs() < 1e-14);
-/// assert!(hyp0f1(0.0, -1.0).is_nan());
+/// assert!(hyp0f1(0.0_f64, -1.0).is_nan());
 /// ```
 ///
 /// References: DLMF [16.2](https://dlmf.nist.gov/16.2),
 /// [10.39](https://dlmf.nist.gov/10.39),
 /// [10.19](https://dlmf.nist.gov/10.19).
-pub fn hyp0f1(b: f64, z: f64) -> f64 {
-    zero_f_one::hyp0f1(b, z)
+pub fn hyp0f1<T: num_traits::Float>(b: T, z: T) -> T {
+    let b = b.to_f64().unwrap_or(f64::NAN);
+    let z = z.to_f64().unwrap_or(f64::NAN);
+    T::from(zero_f_one::hyp0f1(b, z)).unwrap_or(T::nan())
 }
 
 /// Kummer confluent function M(a,b,z) = Σ_{k≥0} (a)_k z^k/((b)_k k!).
@@ -280,8 +287,15 @@ pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
 ///
 /// Evaluates principal Lambert W of exp(x) without overflow for large x.
 /// For negative infinity returns +0; for positive infinity returns +infinity.
+/// Accepts `num_traits::Float` (including `f32` and `f64`), computes in
+/// `f64`, and converts the result to `T`.
 /// Reference: Lawrence et al., ACM TOMS Algorithm 917 (BSD-licensed).
-pub fn wrightomega(x: f64) -> f64 {
+pub fn wrightomega<T: num_traits::Float>(x: T) -> T {
+    let x = x.to_f64().unwrap_or(f64::NAN);
+    T::from(wrightomega_f64(x)).unwrap_or(T::nan())
+}
+
+fn wrightomega_f64(x: f64) -> f64 {
     if x == f64::NEG_INFINITY {
         return 0.0;
     }

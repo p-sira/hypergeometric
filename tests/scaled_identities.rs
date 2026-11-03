@@ -51,7 +51,7 @@ fn hyperu_contiguous_identity_at_small_nonzero_values() {
 fn highly_oscillatory_half_integer_0f1_stays_bounded() {
     // Root-precision correction is local: on huge arguments an ulp of sqrt
     // spans many radians and a linear phase correction must not diverge.
-    for &z in &[-1e8, -1e100, -1e308] {
+    for &z in &[-1e8_f64, -1e100, -1e308] {
         let value = hyp0f1(0.5, z);
         assert!(
             value.is_finite() && value.abs() <= 1.0,

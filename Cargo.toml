@@ -17,3 +17,4 @@ include = ["src/**", "LICENSE", "LICENSES/**"]
 
 [dependencies]
 bessel = { version = "0.1.0" }
+num-traits = "0.2"
