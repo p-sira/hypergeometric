@@ -37,11 +37,21 @@ pub(crate) fn lgamma_sign(x: f64) -> (f64, f64) {
     if x > 0.0 {
         return (positive_lgamma(x), 1.0);
     }
-    let s = (PI * x).sin();
+    // Reduce the argument before multiplying by pi. Direct sin(pi*x) loses
+    // nearly all relative precision for x next to a negative integer pole:
+    // at x = -100 - 1 ulp, the rounding error in pi*x can exceed the phase.
+    // A noninteger binary64 x has |x| < 2^52, so the nearest integer and its
+    // parity are represented exactly.
+    let nearest = x.round();
+    let phase = (PI * (x - nearest)).sin();
+    let s = if nearest % 2.0 == 0.0 { phase } else { -phase };
     if s == 0.0 {
         return (f64::INFINITY, f64::NAN);
     }
-    ((PI / s.abs()).ln() - positive_lgamma(1.0 - x), s.signum())
+    (
+        PI.ln() - s.abs().ln() - positive_lgamma(1.0 - x),
+        s.signum(),
+    )
 }
 #[inline]
 pub(crate) fn gamma(x: f64) -> f64 {
@@ -72,7 +82,9 @@ pub(crate) fn digamma(x: f64) -> f64 {
         return f64::NAN;
     }
     if x < 0.0 {
-        return digamma(1.0 - x) - PI / (PI * x).tan();
+        // cot(pi*x) has period one. Reduce first to retain the binary64
+        // distance to a negative integer pole (as with log-Gamma above).
+        return digamma(1.0 - x) - PI / (PI * (x - x.round())).tan();
     }
     let (mut y, mut x) = (0.0, x);
     while x < 12.0 {
@@ -88,4 +100,64 @@ pub(crate) fn digamma(x: f64) -> f64 {
                 - inv2
                     * (1.0 / 120.0
                         - inv2 * (1.0 / 252.0 - inv2 * (1.0 / 240.0 - inv2 * (5.0 / 660.0)))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{digamma, lgamma_sign};
+
+    #[test]
+    fn gamma_reflection_near_negative_integer_poles() {
+        // 90-digit mpmath 1.3.0, evaluated at the exact binary64 inputs.
+        for &(x, want_log_abs, want_sign, want_digamma) in &[
+            (
+                -1.0000000000000002,
+                36.04365338911715,
+                1.0,
+                4503599627370496.0,
+            ),
+            (
+                -0.9999999999999999,
+                36.7368005696771,
+                -1.0,
+                -9007199254740992.0,
+            ),
+            (
+                -100.00000000000001,
+                -331.85460524980607,
+                -1.0,
+                70368744177668.61,
+            ),
+            (
+                -99.99999999999999,
+                -331.85460524980596,
+                1.0,
+                -70368744177659.39,
+            ),
+            (
+                -1000.0000000000001,
+                -5882.322849724086,
+                -1.0,
+                8796093022214.908,
+            ),
+            (
+                -999.9999999999999,
+                -5882.322849724085,
+                1.0,
+                -8796093022201.092,
+            ),
+        ] {
+            let (got_log, got_sign) = lgamma_sign(x);
+            assert_eq!(got_sign, want_sign, "log-gamma sign at {x}");
+            assert!(
+                (got_log - want_log_abs).abs() < 1e-12_f64.max(2e-14 * want_log_abs.abs()),
+                "log-gamma at {x}: {got_log} vs {want_log_abs}"
+            );
+            let got_psi = digamma(x);
+            assert!(
+                (got_psi - want_digamma).abs() < 4e-15 * want_digamma.abs(),
+                "digamma at {x}: {got_psi} vs {want_digamma}"
+            );
+        }
+    }
 }

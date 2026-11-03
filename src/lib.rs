@@ -262,11 +262,18 @@ pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
         return -lgam(b);
     }
     let lz = z.ln();
-    let (mut scale, mut sum, mut prev) = (f64::NEG_INFINITY, 0.0, f64::NEG_INFINITY);
+    let (mut scale, mut sum, mut prev) = (f64::NEG_INFINITY, 0.0_f64, f64::NEG_INFINITY);
     for k in 0..100000 {
         let k = k as f64;
         let exponent = k * lz - lgam(k + 1.0) - lgam(a * k + b);
         if exponent == f64::NEG_INFINITY {
+            // k=0 may vanish at b=0, while later terms can be finite.
+            // For k>=1, -infinity means log-Gamma has overflowed at a
+            // positive, increasing argument. All subsequent terms vanish,
+            // so the accumulated sum is already converged.
+            if k > 0.0 {
+                return scale + sum.ln();
+            }
             continue;
         }
         if exponent > scale {

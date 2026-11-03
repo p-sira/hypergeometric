@@ -1,6 +1,5 @@
 //! Confluent limit function, compensated and double-double power series.
 use crate::{dd::Dd, gamma};
-use core::f64::consts::PI;
 type StrErr = &'static str;
 const ERROR: StrErr = "0F1 arguments must be finite; parameter cannot be a nonpositive integer";
 fn validate(v: f64) -> Result<(), StrErr> {
@@ -126,23 +125,6 @@ fn positive_log_series(b: f64, z: f64) -> Option<f64> {
     None
 }
 
-// Reflection at b<0 must retain the exact binary64 distance to the nearest
-// gamma pole. Directly evaluating sin(pi*b) loses that distance near -n.
-fn signed_log_gamma(b: f64) -> (f64, f64) {
-    if b > 0.0 {
-        return gamma::lgamma_sign(b);
-    }
-    let nearest = b.round();
-    let sine = (PI * (b - nearest)).sin();
-    let sign = if nearest % 2.0 == 0.0 {
-        sine.signum()
-    } else {
-        -sine.signum()
-    };
-    let lgamma = PI.ln() - sine.abs().ln() - gamma::lgamma_sign(1.0 - b).0;
-    (lgamma, sign)
-}
-
 // Uniform Debye expansion of normalized J_(b-1) for large positive b
 // and 2*sqrt(-z) < (b-1)/sqrt(2). The regular Bessel J underflows in
 // this regime even when 0F1 is ordinary-sized (e.g. b=100000,z=-1e7).
@@ -197,7 +179,7 @@ fn bessel_continuation(b: f64, z: f64) -> Option<f64> {
     if !basis.is_finite() || basis == 0.0 {
         return None;
     }
-    let (gamma_log, gamma_sign) = signed_log_gamma(b);
+    let (gamma_log, gamma_sign) = gamma::lgamma_sign(b);
     let exponent =
         gamma_log + (1.0 - b) * root.ln() + basis.abs().ln() + if z > 0.0 { t } else { 0.0 };
     if exponent.is_nan() {

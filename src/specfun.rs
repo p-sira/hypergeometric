@@ -49,6 +49,11 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
             return 1.0f64;
         }
     }
+    // Exact identity, evaluated with log1p so tiny |x| and very large
+    // negative x do not lose significant digits to 1-x rounding.
+    if a == 1.0 && b == 1.0 && c == 2.0 && x < 1.0 {
+        return -(-x).ln_1p() / x;
+    }
     d = ((c - a) - b);
     id = (d).round();
     if (((a == ((0) as f64)) || (b == ((0) as f64))) && (c != ((0) as f64))) {
@@ -803,7 +808,38 @@ pub(super) fn chgm(mut x: f64, mut a: f64, mut b: f64) -> f64 {
     return hg;
 }
 
+// U(-n,b,x) = (-1)^n n! L_n^(b-1)(x), where n is a nonnegative integer.
+// The Laguerre three-term recurrence avoids cancellation between the two
+// hypergeometric series in the legacy chgu dispatch. Keep its use to a
+// checked moderate-parameter region: higher orders/arguments may overflow
+// intermediates or accumulate substantial phase error near polynomial zeros.
+fn hyperu_neg_integer_polynomial(n: usize, b: f64, x: f64) -> Option<f64> {
+    if n == 0 {
+        return Some(1.0);
+    }
+    let mut prev = 1.0;
+    let mut curr = x - b;
+    for k in 2..=n {
+        let k = k as f64;
+        let next = (x - (2.0 * k + b - 2.0)).mul_add(curr, -(k - 1.0) * (k + b - 2.0) * prev);
+        if !next.is_finite() {
+            return None;
+        }
+        prev = curr;
+        curr = next;
+    }
+    Some(curr)
+}
+
 pub(super) fn chgu(mut x: f64, mut a: f64, mut b: f64, md: &mut [i32], isfer: &mut [i32]) -> f64 {
+    if a < 0.0 && a == a.trunc() && a >= -128.0 && (0.0..=16.0).contains(&b) && x > 0.0 && x <= 10.0
+    {
+        if let Some(value) = hyperu_neg_integer_polynomial((-a) as usize, b, x) {
+            md[0] = 2;
+            isfer[0] = 0;
+            return value;
+        }
+    }
     let mut il1: i32 = 0;
     let mut il2: i32 = 0;
     let mut il3: i32 = 0;
