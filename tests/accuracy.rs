@@ -76,7 +76,7 @@ fn identities_and_edge_values() {
         assert!((hyp2f1(1., 2., 2., x.min(0.9)) - (1. - x.min(0.9)).recip()).abs() < 1e-12);
         assert!((wrightomega(x) + wrightomega(x).ln() - x).abs() < 1e-12);
     }
-    assert!(hyp0f1(0., 1.).is_nan());
+    assert!(hyp0f1(0.0_f64, 1.).is_nan());
     assert!(hyperu(1., 1., -1.).is_nan());
     assert_eq!(wrightomega(f64::NEG_INFINITY), 0.);
     assert_eq!(hyperu(-1.0, 0.0, 0.0), 0.0);

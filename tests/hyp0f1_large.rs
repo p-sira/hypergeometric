@@ -52,15 +52,15 @@ fn wide_range_independent_high_precision() {
 #[test]
 fn large_b_negative_argument_and_overflow() {
     // The normalized Bessel value can be finite even when J_{b-1} underflows.
-    let b = 100000.0;
+    let b = 100000.0_f64;
     let got = hyp0f1(b, -1e7);
     let expected = 3.5384111609128018e-44;
     assert!(
         (got / expected - 1.0).abs() < 2e-10,
         "got {got}, expected {expected}"
     );
-    assert!(hyp0f1(0.25, 1e6).is_infinite());
-    assert!(hyp0f1(0.25, -1e4).is_finite());
+    assert!(hyp0f1(0.25_f64, 1e6).is_infinite());
+    assert!(hyp0f1(0.25_f64, -1e4).is_finite());
     // Exact sinh identity stays finite even when the intermediate sinh
     // overflows: at z = 126025, 2 sqrt(z) = 710.
     let t = 710.0_f64;
