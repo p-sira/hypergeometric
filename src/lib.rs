@@ -1,4 +1,4 @@
-//! Real hypergeometric and Wright functions, in pure Rust.
+//! Real hypergeometric and Wright functions in pure Rust.
 //!
 //! Functions return `f64::NAN` for invalid arguments or numerical regions where
 //! a bounded calculation cannot reliably resolve the real value. See individual

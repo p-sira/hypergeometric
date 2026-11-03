@@ -3,14 +3,17 @@ name = "hypergeometric"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-authors = ["Sira Pornsiriprasert"]
-license = "BSD-3-Clause"
-description = "Pure Rust real hypergeometric and Wright special functions"
-readme = "README.md"
+authors = ["Sira Pornsiriprasert <code@psira.me>"]
 documentation = "https://docs.rs/hypergeometric"
+homepage = "https://github.com/p-sira/hypergeometric"
+repository = "https://github.com/p-sira/hypergeometric"
+license = "BSD-3-Clause"
+
+description = "Real hypergeometric and Wright special functions in pure Rust"
+readme = "README.md"
 keywords = ["hypergeometric", "wright", "special-functions", "numerics", "math"]
 categories = ["mathematics", "science"]
-include = ["src/**", "LICENSE", "LICENSES/**", "README.md"]
+include = ["src/**", "LICENSE", "LICENSES/**"]
 
 [dependencies]
-bessel = { version = "0.1.0", path = "../bessel" }
+bessel = { version = "0.1.0" }
