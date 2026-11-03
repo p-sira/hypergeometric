@@ -248,6 +248,75 @@ pub fn wright_bessel(a: f64, b: f64, z: f64) -> f64 {
     log_wright_bessel(a, b, z).exp()
 }
 
+// 90-digit mpmath ln(k!) references; avoid two Lanczos evaluations per Wright term.
+const WRIGHT_LOG_FACTORIAL: [f64; 65] = [
+    0.0,
+    0.0,
+    std::f64::consts::LN_2,
+    1.79175946922805496e+00,
+    3.17805383034794575e+00,
+    4.78749174278204581e+00,
+    6.57925121201010121e+00,
+    8.52516136106541467e+00,
+    1.06046029027452509e+01,
+    1.28018274800814691e+01,
+    1.51044125730755159e+01,
+    1.75023078458738865e+01,
+    1.99872144956618847e+01,
+    2.25521638531234245e+01,
+    2.51912211827386798e+01,
+    2.78992713838408903e+01,
+    3.06718601060806719e+01,
+    3.35050734501368908e+01,
+    3.63954452080330526e+01,
+    3.93398841871994946e+01,
+    4.23356164607534851e+01,
+    4.53801388984769076e+01,
+    4.84711813518352272e+01,
+    5.16066755677643769e+01,
+    5.47847293981123187e+01,
+    5.80036052229805179e+01,
+    6.12617017610020014e+01,
+    6.45575386270063376e+01,
+    6.78897431371815401e+01,
+    7.12570389671680147e+01,
+    7.46582363488301581e+01,
+    7.80922235533153071e+01,
+    8.15579594561150429e+01,
+    8.50544670175815156e+01,
+    8.85808275421976816e+01,
+    9.21361756036870929e+01,
+    9.57196945421432019e+01,
+    9.93306124547874276e+01,
+    1.02968198614513810e+02,
+    1.06631760260643460e+02,
+    1.10320639714757391e+02,
+    1.14034211781461707e+02,
+    1.17771881399745070e+02,
+    1.21533081515438639e+02,
+    1.25317271149356898e+02,
+    1.29123933639127216e+02,
+    1.32952575035616320e+02,
+    1.36802722637326355e+02,
+    1.40673923648234251e+02,
+    1.44565743946344895e+02,
+    1.48477766951773020e+02,
+    1.52409592584497346e+02,
+    1.56360836303078798e+02,
+    1.60331128216630901e+02,
+    1.64320112263195170e+02,
+    1.68327445448427653e+02,
+    1.72352797139162789e+02,
+    1.76395848406997345e+02,
+    1.80456291417543781e+02,
+    1.84533828861449479e+02,
+    1.88628173423671598e+02,
+    1.92739047287844897e+02,
+    1.96866181672890008e+02,
+    2.01009316399281516e+02,
+    2.05168199482641199e+02,
+];
+
 /// Logarithm of the generalized Wright Bessel function on a,b,z≥0.
 /// Returns -∞ when the positive-domain series evaluates to exactly zero.
 pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
@@ -264,8 +333,12 @@ pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
     let lz = z.ln();
     let (mut scale, mut sum, mut prev) = (f64::NEG_INFINITY, 0.0_f64, f64::NEG_INFINITY);
     for k in 0..100000 {
+        let log_factorial = WRIGHT_LOG_FACTORIAL
+            .get(k)
+            .copied()
+            .unwrap_or_else(|| lgam(k as f64 + 1.0));
         let k = k as f64;
-        let exponent = k * lz - lgam(k + 1.0) - lgam(a * k + b);
+        let exponent = k * lz - log_factorial - lgam(a * k + b);
         if exponent == f64::NEG_INFINITY {
             // k=0 may vanish at b=0, while later terms can be finite.
             // For k>=1, -infinity means log-Gamma has overflowed at a
@@ -276,11 +349,13 @@ pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
             }
             continue;
         }
-        if exponent > scale {
+        let term = if exponent > scale {
             sum *= (scale - exponent).exp();
             scale = exponent;
-        }
-        let term = (exponent - scale).exp();
+            1.0
+        } else {
+            (exponent - scale).exp()
+        };
         sum += term;
         if exponent < prev && term <= f64::EPSILON * sum {
             return scale + sum.ln();

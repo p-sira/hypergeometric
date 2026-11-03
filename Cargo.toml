@@ -1,6 +1,6 @@
 [package]
 name = "hypergeometric"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Sira Pornsiriprasert <code@psira.me>"]
@@ -13,7 +13,7 @@ description = "Real hypergeometric and Wright special functions in pure Rust"
 readme = "README.md"
 keywords = ["hypergeometric", "wright", "special-functions", "numerics", "math"]
 categories = ["mathematics", "science"]
-include = ["src/**", "LICENSE", "LICENSES/**"]
+include = ["src/**", "LICENSE", "LICENSES/**", "CHANGELOG.md"]
 
 [dependencies]
 bessel = { version = "0.1.0" }
