@@ -18,3 +18,10 @@ include = ["src/**", "LICENSE", "LICENSES/**"]
 [dependencies]
 bessel = { version = "0.1.0" }
 num-traits = "0.2"
+
+[dev-dependencies]
+divan = { version = "6.0.0", package = "codspeed-divan-compat" }
+
+[[bench]]
+name = "hypergeometric"
+harness = false
