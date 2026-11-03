@@ -4,14 +4,39 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     if !a.is_finite() || !b.is_finite() || !x.is_finite() || a.abs() > 100_000.0 {
         return f64::NAN;
     }
+    // A nonpositive integer denominator is a pole unless a negative integer
+    // numerator terminates the series before the vanishing denominator term.
+    // This includes a=b=-n: M(-n,-n,x) is a polynomial, not exp(x).
+    if b <= 0.0 && b == b.floor() && !(a < 0.0 && a == a.floor() && a >= b) {
+        return f64::INFINITY;
+    }
     if a == 0.0 || x == 0.0 {
         return 1.0;
     }
-    if a == b {
+    if a == b && (a > 0.0 || a != a.floor()) {
         return x.exp();
     }
-    if b <= 0.0 && b == b.floor() && !(a <= 0.0 && a == a.floor() && a > b) {
-        return f64::INFINITY;
+    if b > 0.0 && a == b + 1.0 && a - 1.0 == b {
+        // M(b+1,b,x) = exp(x) (1 + x/b). This avoids a power series or
+        // outward continuation. Check both directions so an inexact b+1
+        // (e.g. 0.1 + 1.0) cannot spuriously satisfy the identity for the
+        // exact binary64 input parameters. Near the zero x=-b, add before
+        // dividing to avoid cancellation in 1 + x/b.
+        let factor = (b + x) / b;
+        if factor == 0.0 {
+            return 0.0;
+        }
+        if factor.is_finite() && (-700.0..=700.0).contains(&x) {
+            return x.exp() * factor;
+        }
+        // Keep tiny results representable when exp(x) underflows, and
+        // avoid overflow in x/b when b is subnormal.
+        let (sign, log_factor) = if factor.is_finite() {
+            (factor.signum(), factor.abs().ln())
+        } else {
+            (x.signum(), x.abs().ln() - b.ln())
+        };
+        return sign * (x + log_factor).exp();
     }
     // Nonpositive integer a terminates the defining hypergeometric series.
     // Evaluating that polynomial directly avoids the gamma poles introduced
