@@ -65,6 +65,7 @@ mod hyp2f1_bench {
         ("near_one", 0.5, 1.5, 2.25, 0.95),
         ("negative_z", 1.25, 2.5, 3.5, -5.0),
         ("integer_c_minus_ab", 1.0, 2.0, 3.0, 0.9),
+        ("integer_d_nontrivial", 1.25, 0.75, 2.0, 0.999),
         ("terminating", -10.0, 3.5, 2.0, 2.5),
     ];
 
@@ -85,6 +86,8 @@ mod hyperu_bench {
         ("recurrence", 0.1, 1.0, 0.5),
         ("large_z", 2.0, 3.0, 50.0),
         ("negative_a", -3.5, 1.25, 4.0),
+        ("integer_b_positive", 1.25, 16.0, 0.75),
+        ("integer_b_negative", 1.25, -16.0, 0.75),
     ];
 
     #[divan::bench(args = CASES.iter().map(|c| c.0))]

@@ -419,17 +419,33 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
                         }
                     }
                     ax = (s).ln();
-                    y = ((((psi(1.0f64) + psi((1.0f64 + e))) - psi((a + d1))) - psi((b + d1)))
-                        - ax);
+                    let mut psi_one = psi(1.0);
+                    let mut psi_e = psi(1.0 + e);
+                    let mut psi_a = psi(a + d1);
+                    let mut psi_b = psi(b + d1);
+                    // For positive arguments, psi(z+1)=psi(z)+1/z removes
+                    // four costly digamma evaluations from every term.
+                    // Keep direct evaluation across nonpositive arguments
+                    // where recurrence through a pole can lose accuracy.
+                    let recur_psi = a + d1 > 0.0 && b + d1 > 0.0;
+                    y = (((psi_one + psi_e) - psi_a) - psi_b) - ax;
                     y *= rgamma((e + 1.0f64));
                     p = ((((a + d1) * (b + d1)) * s) * rgamma((e + 2.0f64)));
                     t = 1.0f64;
                     loop {
                         {
-                            r = ((((psi((1.0f64 + t)) + psi(((1.0f64 + t) + e)))
-                                - psi(((a + t) + d1)))
-                                - psi(((b + t) + d1)))
-                                - ax);
+                            if recur_psi {
+                                psi_one += 1.0 / t;
+                                psi_e += 1.0 / (t + e);
+                                psi_a += 1.0 / ((a + (t - 1.0)) + d1);
+                                psi_b += 1.0 / ((b + (t - 1.0)) + d1);
+                                r = (((psi_one + psi_e) - psi_a) - psi_b) - ax;
+                            } else {
+                                r = ((((psi((1.0f64 + t)) + psi(((1.0f64 + t) + e)))
+                                    - psi(((a + t) + d1)))
+                                    - psi(((b + t) + d1)))
+                                    - ax);
+                            }
                             q = (p * r);
                             y += q;
                             p *= ((s * ((a + t) + d1)) / (t + 1.0f64));
@@ -1344,58 +1360,40 @@ pub(super) fn chgubi(mut x: f64, mut a: f64, mut b: f64, id: &mut [i32]) -> f64 
     r = ((1) as f64);
     hmax = ((0) as f64);
     hmin = 1.0e+300f64;
+    // Extend sums across terms instead of restarting from m=1 at each k.
+    // For b<0, s0 is precisely the starting prefix of s1.
+    let mut running_s1 = if b > 0.0 { 0.0 } else { s0 };
+    let mut running_s2 = 0.0;
+    if b > 0.0 && n > 8 {
+        for m in 1..=n {
+            running_s2 += 1.0 / (m + 1) as f64;
+        }
+    }
     k = 1;
     while (k <= 150) {
         {
-            s1 = ((0) as f64);
-            s2 = ((0) as f64);
             if (b > ((0) as f64)) {
                 {
-                    m = 1;
-                    while (m <= k) {
-                        {
-                            s1 -= (((((m) as f64) + (((2) as f64) * a)) - ((2) as f64))
-                                / (((m) as f64) * ((((m) as f64) + a) - ((1) as f64))));
+                    let kf = k as f64;
+                    running_s1 -= ((kf + 2.0 * a) - 2.0) / (kf * ((kf + a) - 1.0));
+                    s1 = running_s1;
+                    s2 = if n > 8 {
+                        running_s2
+                    } else {
+                        let mut sum = 0.0;
+                        for m in 1..=n {
+                            sum += 1.0 / (k + m) as f64;
                         }
-                        {
-                            m += 1;
-                            m
-                        };
-                    }
-                    m = 1;
-                    while (m <= n) {
-                        {
-                            s2 += (1.0f64 / ((k + m) as f64));
-                        }
-                        {
-                            m += 1;
-                            m
-                        };
-                    }
+                        sum
+                    };
                 }
             } else {
                 {
-                    m = 1;
-                    while (m <= (k + n)) {
-                        {
-                            s1 += ((1.0f64 - a)
-                                / (((m) as f64) * ((((m) as f64) + a) - ((1) as f64))));
-                        }
-                        {
-                            m += 1;
-                            m
-                        };
-                    }
-                    m = 1;
-                    while (m <= k) {
-                        {
-                            s2 += (1.0f64 / ((m) as f64));
-                        }
-                        {
-                            m += 1;
-                            m
-                        };
-                    }
+                    let mf = (n + k) as f64;
+                    running_s1 += (1.0 - a) / (mf * ((mf + a) - 1.0));
+                    running_s2 += 1.0 / k as f64;
+                    s1 = running_s1;
+                    s2 = running_s2;
                 }
             }
             hw = ((((((2) as f64) * el) + ps) + s1) - s2);
@@ -1418,6 +1416,9 @@ pub(super) fn chgubi(mut x: f64, mut a: f64, mut b: f64, id: &mut [i32]) -> f64 
                 }
             }
             h0 = hm2;
+            if b > 0.0 && n > 8 {
+                running_s2 += 1.0 / (k + n + 1) as f64 - 1.0 / (k + 1) as f64;
+            }
         }
         {
             k += 1;
@@ -1760,4 +1761,274 @@ pub(super) fn chguit(mut x: f64, mut a: f64, mut b: f64, id: &mut [i32]) -> f64 
     hu2 /= ga;
     hu = (hu1 + hu2);
     return hu;
+}
+
+#[cfg(test)]
+mod optimization_tests {
+    use super::*;
+
+    // Original integer-d continuation of hyt2f1, using four independently
+    // evaluated digamma values in each term.
+    fn reference_hyt2f1_integer_d(a: f64, b: f64, c: f64, x: f64) -> f64 {
+        let d = (c - a) - b;
+        let id = d.round();
+        assert_eq!(d, id);
+        let s = 1.0 - x;
+        let (e, d1, d2, aid) = if id >= 0.0 {
+            (d, d, 0.0, id as i32)
+        } else {
+            (-d, 0.0, d, (-id) as i32)
+        };
+        let ax = s.ln();
+        let mut y = (((psi(1.0) + psi(1.0 + e)) - psi(a + d1)) - psi(b + d1)) - ax;
+        y *= rgamma(e + 1.0);
+        let mut p = ((a + d1) * (b + d1) * s) * rgamma(e + 2.0);
+        let mut t = 1.0;
+        loop {
+            let r = (((psi(1.0 + t) + psi(1.0 + t + e)) - psi(a + t + d1)) - psi(b + t + d1)) - ax;
+            let q = p * r;
+            y += q;
+            p *= (s * (a + t + d1)) / (t + 1.0);
+            p *= (b + t + d1) / (t + 1.0 + e);
+            t += 1.0;
+            if t > HYP2F1_MAXITER as f64 {
+                return f64::NAN;
+            }
+            if y != 0.0 && (q / y).abs() <= HYP2F1_EPS {
+                break;
+            }
+        }
+        if id == 0.0 {
+            return y * (Gamma(c) / (Gamma(a) * Gamma(b)));
+        }
+        let mut y1 = 1.0;
+        let mut t = 0.0;
+        let mut p = 1.0;
+        for _ in 1..aid {
+            let r = (1.0 - e) + t;
+            p *= (s * (a + t + d2) * (b + t + d2)) / r;
+            t += 1.0;
+            p /= t;
+            y1 += p;
+        }
+        let g = Gamma(c);
+        y1 *= (Gamma(e) * g) * (rgamma(a + d1) * rgamma(b + d1));
+        y *= g * (rgamma(a + d2) * rgamma(b + d2));
+        if (aid & 1) != 0 {
+            y = -y;
+        }
+        let q = s.powf(id);
+        if id > 0.0 {
+            y *= q;
+        } else {
+            y1 *= q;
+        }
+        y + y1
+    }
+
+    #[test]
+    fn hyt2f1_digamma_recurrence_matches_original_continuation() {
+        for &(a, b, c) in &[
+            (0.5, 0.5, 1.0),
+            (0.5, 0.75, 1.25),
+            (1.0, 1.0, 2.0),
+            (0.5, 1.25, 2.75),
+            (1.25, 2.0, 4.25),
+            (0.5, 1.25, 9.75),
+            (0.5, 0.75, 0.25),
+            (1.5, 1.25, 0.75),
+            (-0.25, 0.75, 0.5),
+            (-0.75, 1.25, 0.5),
+        ] {
+            for &x in &[0.91, 0.98, 0.999, 0.99999999999] {
+                let mut loss = [0.0];
+                let got = hyt2f1(a, b, c, x, &mut loss);
+                let reference = reference_hyt2f1_integer_d(a, b, c, x);
+                assert!(
+                    (got - reference).abs() <= 3e-12 * reference.abs().max(1.0),
+                    "a={a} b={b} c={c} x={x}: {got} vs {reference}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn integer_d_continuation_matches_logarithmic_identity() {
+        // 2F1(1,1;2;x) = -ln(1-x)/x, from integrating the geometric series.
+        for &x in &[0.91, 0.99, 0.999999, 0.99999999999] {
+            let mut loss = [0.0];
+            let result = hyt2f1(1.0, 1.0, 2.0, x, &mut loss);
+            let expected = -(-x).ln_1p() / x;
+            assert!((result - expected).abs() <= 2e-12 * expected.abs(), "x={x}");
+        }
+    }
+
+    // Pre-optimization chgubi with the original nested sums. Keep this
+    // independent of the streaming implementation to catch changes in its
+    // convergence decisions, final value, and reported number of digits.
+    fn reference_chgubi(x: f64, a: f64, b: f64) -> (f64, i32) {
+        let n = (b - 1.0).abs() as i32;
+        let (mut rn, mut rn1) = (1.0, 1.0);
+        for j in 1..=n {
+            rn *= j as f64;
+            if j == n - 1 {
+                rn1 = rn;
+            }
+        }
+        let ps = psi_spec(a);
+        let ga = gamma2(a);
+        let (a0, a2, ua, ub) = if b > 0.0 {
+            let a1 = a - n as f64;
+            (
+                a,
+                a1,
+                neg_one_pow(n - 1) / (rn * gamma2(a1)),
+                (rn1 / ga) * x.powf(-(n as f64)),
+            )
+        } else {
+            let a1 = a + n as f64;
+            (
+                a1,
+                a,
+                (neg_one_pow(n - 1) / (rn * ga)) * x.powf(n as f64),
+                rn1 / gamma2(a1),
+            )
+        };
+        let (mut hm1, mut r, mut hmax, mut hmin, mut h0) =
+            (1.0_f64, 1.0_f64, 0.0_f64, 1e300_f64, 0.0_f64);
+        for k in 1..=150 {
+            r = ((r * (a0 + k as f64 - 1.0)) * x) / ((n + k) * k) as f64;
+            hm1 += r;
+            hmax = hmax.max(hm1.abs());
+            hmin = hmin.min(hm1.abs());
+            if (hm1 - h0).abs() < hm1.abs() * 1e-15 {
+                break;
+            }
+            h0 = hm1;
+        }
+        let da1 = hmax.log10();
+        let da2 = if hmin != 0.0 { hmin.log10() } else { 0.0 };
+        let mut digits = 15 - ((da1 - da2).abs() as i32);
+        hm1 *= x.ln();
+
+        let mut s0 = 0.0;
+        for m in 1..=n {
+            let mf = m as f64;
+            if b >= 0.0 {
+                s0 -= 1.0 / mf;
+            } else {
+                s0 += (1.0 - a) / (mf * ((a + mf) - 1.0));
+            }
+        }
+        let mut hm2 = (ps + 2.0 * 0.5772156649015329) + s0;
+        r = 1.0;
+        hmax = 0.0;
+        hmin = 1e300;
+        for k in 1..=150 {
+            let (mut s1, mut s2) = (0.0, 0.0);
+            if b > 0.0 {
+                for m in 1..=k {
+                    let mf = m as f64;
+                    s1 -= ((mf + 2.0 * a) - 2.0) / (mf * ((mf + a) - 1.0));
+                }
+                for m in 1..=n {
+                    s2 += 1.0 / (k + m) as f64;
+                }
+            } else {
+                for m in 1..=(k + n) {
+                    let mf = m as f64;
+                    s1 += (1.0 - a) / (mf * ((mf + a) - 1.0));
+                }
+                for m in 1..=k {
+                    s2 += 1.0 / m as f64;
+                }
+            }
+            let hw = ((2.0 * 0.5772156649015329 + ps) + s1) - s2;
+            r = ((r * (a0 + k as f64 - 1.0)) * x) / ((n + k) * k) as f64;
+            hm2 += r * hw;
+            hmax = hmax.max(hm2.abs());
+            hmin = hmin.min(hm2.abs());
+            if ((hm2 - h0) / hm2).abs() < 1e-15 {
+                break;
+            }
+            h0 = hm2;
+        }
+        let db1 = hmax.log10();
+        let db2 = if hmin != 0.0 { hmin.log10() } else { 0.0 };
+        digits = digits.min(15 - ((db1 - db2).abs() as i32));
+
+        let mut hm3 = if n == 0 { 0.0 } else { 1.0 };
+        r = 1.0;
+        for k in 1..n {
+            r = ((r * (a2 + k as f64 - 1.0)) / ((k - n) * k) as f64) * x;
+            hm3 += r;
+        }
+        let sa = ua * (hm1 + hm2);
+        let sb = ub * hm3;
+        let hu = sa + sb;
+        let mut id1 = 0;
+        let mut id2 = 0;
+        if sa != 0.0 {
+            id1 = sa.abs().log10() as i32;
+        }
+        if hu != 0.0 {
+            id2 = hu.abs().log10() as i32;
+        }
+        if sa * sb < 0.0 {
+            digits -= (id1 - id2).abs();
+        }
+        (hu, digits)
+    }
+
+    #[test]
+    fn chgubi_streaming_matches_original_nested_sums() {
+        for &b in &[
+            -16.0, -9.0, -3.0, -1.0, 1.0, 2.0, 3.0, 9.0, 10.0, 16.0, 32.0,
+        ] {
+            for &a in &[0.5, 1.25, 2.0, 2.75, 5.5] {
+                for &x in &[0.125, 0.75, 2.0, 6.0] {
+                    let (reference, expected_digits) = reference_chgubi(x, a, b);
+                    let mut digits = [0];
+                    let result = chgubi(x, a, b, &mut digits);
+                    if reference.is_nan() {
+                        assert!(result.is_nan(), "a={a} b={b} x={x}");
+                    } else if reference.is_infinite() {
+                        assert_eq!(result, reference, "a={a} b={b} x={x}");
+                    } else {
+                        assert!(
+                            (result - reference).abs() <= 3e-12 * reference.abs().max(1.0),
+                            "a={a} b={b} x={x}: {result} vs {reference}"
+                        );
+                    }
+                    assert!(
+                        (digits[0] - expected_digits).abs() <= 1,
+                        "precision estimate a={a} b={b} x={x}: {} vs {expected_digits}",
+                        digits[0]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chgubi_positive_integer_b_matches_finite_laplace_sum() {
+        // U(1,b,x) = integral exp(-xt)(1+t)^(b-2) dt for integer b>=2.
+        // Expand the polynomial and integrate its powers independently.
+        for b in [2_i32, 3, 9, 10] {
+            for &x in &[1.0, 2.0, 5.0, 10.0] {
+                let mut term = 1.0 / x;
+                let mut expected = term;
+                for k in 1..=(b - 2) {
+                    term *= (b - 1 - k) as f64 / x;
+                    expected += term;
+                }
+                let mut digits = [0];
+                let result = chgubi(x, 1.0, b as f64, &mut digits);
+                assert!(
+                    (result - expected).abs() <= 2e-9 * expected,
+                    "b={b} x={x}: {result} vs {expected}"
+                );
+            }
+        }
+    }
 }

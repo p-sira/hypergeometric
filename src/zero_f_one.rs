@@ -103,6 +103,7 @@ fn positive_log_series(b: f64, z: f64) -> Option<f64> {
     let mut log_term: f64 = 0.0;
     let mut log_sum: f64 = 0.0;
     let log_z = z.ln();
+    let log_max = f64::MAX.ln();
     for k in 1..=16384 {
         let kf = k as f64;
         let next_b = b + (kf - 1.0);
@@ -113,9 +114,12 @@ fn positive_log_series(b: f64, z: f64) -> Option<f64> {
         if log_term == f64::NEG_INFINITY {
             return Some(log_sum.exp());
         }
+        // log(exp(log_sum) + exp(log_term)), evaluated with one exponential
+        // and log1p. Its exponential argument is nonpositive, preventing
+        // intermediate overflow even when the resulting sum is large.
         let largest = log_sum.max(log_term);
-        log_sum = largest + ((log_sum - largest).exp() + (log_term - largest).exp()).ln();
-        if log_sum > f64::MAX.ln() {
+        log_sum = largest + (-(log_sum - log_term).abs()).exp().ln_1p();
+        if log_sum > log_max {
             return Some(f64::INFINITY);
         }
         if z / ((b + kf) * (kf + 1.0)) < 0.5 && log_term < log_sum - 38.0 {
@@ -266,4 +270,36 @@ fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
 /// Real 0F1(;v;z), NaN for poles and unresolved cancellation.
 pub(crate) fn hyp0f1(v: f64, z: f64) -> f64 {
     real_kernel(v, z).unwrap_or(f64::NAN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::positive_log_series;
+
+    #[test]
+    fn positive_log_series_matches_independent_large_argument_values() {
+        // 180-digit mpmath references for these exact binary64 inputs.
+        for (b, z, expected) in [
+            (0.25, 200.0, 3.7902228868978423e12),
+            (0.25, 1000.0, 7.093970113691315e27),
+            (50.0, 10000.0, 3.1136144040041786e47),
+        ] {
+            let actual = positive_log_series(b, z).unwrap();
+            assert!(
+                (actual / expected - 1.0).abs() < 2e-11,
+                "0F1(;{b};{z}): {actual} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn positive_log_series_preserves_finite_values_near_overflow() {
+        // 0F1(;3/2;z) = sinh(2 sqrt(z))/(2 sqrt(z)). At t=710 the
+        // exponential form stays finite even though sinh(t) overflows.
+        let z = 126025.0;
+        let expected = (710.0_f64 - 1420.0_f64.ln()).exp();
+        let actual = positive_log_series(1.5, z).unwrap();
+        assert!((actual / expected - 1.0).abs() < 2e-11);
+        assert_eq!(positive_log_series(1.5, 160000.0), Some(f64::INFINITY));
+    }
 }

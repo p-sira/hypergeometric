@@ -5,6 +5,7 @@
 ### 0.1.1
 
 **Performance Improvements**
+- Reduce integer-difference 2F1 continuation costs with digamma recurrence updates; stream integer-parameter Tricomi-U harmonic sums instead of rebuilding nested prefixes. Simplify large-positive 0F1 log-sum-exp accumulation while retaining overflow checks and high-precision reference tests.
 - `wright_bessel`, `log_wright_bessel`: Cache 65 independently computed logarithmic factorials for the common low-order Wright series and avoid a redundant exponential in the log-sum-exp update; retain the bounded fallback for higher terms ([#4](https://github.com/p-sira/hypergeometric/pull/4)).
 
 **Tests**
