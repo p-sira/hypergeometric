@@ -352,13 +352,24 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
             if ((d - id).abs() > MACHEP) {
                 {
                     let mut sgngam: i32 = 0;
-                    y = hys2f1(a, b, c, x, std::slice::from_mut(&mut err));
-                    if (err < HYP2F1_ETHRESH) {
-                        {
-                            {
-                                loss[0] = err;
-                                return y;
-                            }
+                    // Close to x=1, direct summation can require hundreds
+                    // or thousands of terms. The continuation at 1-x is
+                    // short and avoids that pass when its two coefficients
+                    // are well separated from gamma poles. Keep the former
+                    // error-driven choice at nearby integer d, or when
+                    // parameters cross possible gamma poles.
+                    let direct_first = x <= 0.95
+                        || a <= 0.0
+                        || b <= 0.0
+                        || c < a
+                        || c < b
+                        || c > 32.0
+                        || (d - id).abs() < 0.125;
+                    if direct_first {
+                        y = hys2f1(a, b, c, x, std::slice::from_mut(&mut err));
+                        if err < HYP2F1_ETHRESH {
+                            loss[0] = err;
+                            return y;
                         }
                     }
                     q = hys2f1(a, b, (1.0f64 - d), s, std::slice::from_mut(&mut err));

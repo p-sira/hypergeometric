@@ -66,10 +66,11 @@ pub(super) fn negative_argument(a: f64, b: f64, x: f64) -> f64 {
         } else {
             Dd::from(-step)
         };
-        // a + n is exact in double-double; integer factors need no
-        // promotion; h^2 and z - b are formed once per step. The derivative
-        // sum Σ (n+2) w_n / h is divided by h once, after the loop.
-        let squared = h * h;
+        // Divide by the fixed center once per Taylor step instead of once
+        // per coefficient. The remaining (n+1)(n+2) divisor is a small
+        // exact integer and admits the cheaper double-double div_small.
+        // The derivative sum Σ (n+2) w_n / h is divided by h after the loop.
+        let h_over_center = h.div_dd(center);
         let shifted = center - b;
         let (mut u, mut v) = (y, slope * h);
         let initial = v;
@@ -83,9 +84,16 @@ pub(super) fn negative_argument(a: f64, b: f64, x: f64) -> f64 {
             // Store c_n*h^n so powers cannot overflow independently.
             let n = n as f64;
             let (n1, n2) = (n + 1.0, n + 2.0);
-            let numerator =
-                Dd::sum(a.hi, n) * u * squared + (shifted.add_f64(-n) * v).mul_f64(n1) * h;
-            let w = numerator.div_dd(center.mul_f64(n2 * n1));
+            let numerator = Dd::sum(a.hi, n) * u * h + (shifted.add_f64(-n) * v).mul_f64(n1);
+            let scaled = numerator * h_over_center;
+            let divisor = n2 * n1;
+            let w = if scaled.hi.abs() < 1e280 {
+                scaled.div_small(divisor)
+            } else {
+                // The integer divisor path splits its quotient, so very
+                // large intermediates need the general DD division.
+                scaled.div_dd(Dd::from(divisor))
+            };
             let derivative_term = w.mul_f64(n2);
             next_y = next_y + w;
             weighted = weighted + derivative_term;
@@ -166,4 +174,28 @@ fn transformed_series(a: Dd, b: Dd, x: f64) -> Option<f64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::negative_argument;
+
+    #[test]
+    fn continued_solution_matches_independent_high_precision_values() {
+        // 100-digit mpmath references; all arguments are exactly representable
+        // as binary64. The x=-50 and -100 cases use outward DD continuation.
+        let cases = [
+            (31.125, 2.5, -20.0, 5.5342442435984765e-8),
+            (31.125, 2.5, -50.0, 5.904120431546372e-15),
+            (31.125, 2.5, -100.0, 7.590420474202667e-26),
+            (5.125, 4.625, -40.0, -2.9838564588541513e-8),
+        ];
+        for (a, b, x, expected) in cases {
+            let actual = negative_argument(a, b, x);
+            assert!(
+                (actual / expected - 1.0).abs() <= 2e-10,
+                "({a},{b},{x}): {actual} vs {expected}"
+            );
+        }
+    }
 }
