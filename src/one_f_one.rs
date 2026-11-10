@@ -1,5 +1,7 @@
 //! Sci legacy confluent hypergeometric dispatcher and Kummer continuation.
 //! Adapted from sci-special's pure Rust implementation. See crate LICENSE.
+use crate::dd::Dd;
+
 pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     if !a.is_finite() || !b.is_finite() || !x.is_finite() || a.abs() > 100_000.0 {
         return f64::NAN;
@@ -38,22 +40,31 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
         };
         return sign * (x + log_factor).exp();
     }
-    // Nonpositive integer a terminates the defining hypergeometric series.
-    // Evaluating that polynomial directly avoids the gamma poles introduced
-    // by the general asymptotic formulas for negative x.
-    if a < 0.0 && a == a.floor() {
-        let (mut term, mut sum) = (1.0, 1.0);
-        for k in 0..(-a) as usize {
-            let k = k as f64;
-            term *= (a + k) * x / ((b + k) * (k + 1.0));
-            sum += term;
+    // M(-n,b,x) is a normalized Laguerre polynomial. Its defining sum
+    // can cancel tens of digits; the three-term recurrence avoids those
+    // enormous alternating terms. DD also preserves accuracy near zeros.
+    if a < 0.0 {
+        if a == a.floor() {
+            return laguerre((-a) as usize, b, x);
         }
-        return sum;
+        // Keep recurrence dispatch within the negative-numerator branch so
+        // the positive-series fast path pays no additional range checks.
+        if (-128.0..-16.0).contains(&a)
+            && (2.0..=64.0).contains(&b)
+            && (8.0..=32.0).contains(&x)
+            && let Some(value) = if [a, b, x].iter().all(|v| v * 16.0 == (v * 16.0).trunc()) {
+                negative_numerator::<true>(a, b, x)
+            } else {
+                negative_numerator::<false>(a, b, x)
+            }
+        {
+            return value;
+        }
     }
     // The Kummer-transformed series still has catastrophic cancellation when
     // b-a is large and negative. Continue the analytic solution outwards instead
     // of summing exponentially larger alternating terms at the target.
-    if a > 0.0 && b < a && (-1000.0..0.0).contains(&x) && (-8.0..=64.0).contains(&b) {
+    if a > 0.0 && b < a && (-1000.0..0.0).contains(&x) && (-64.0..=64.0).contains(&b) {
         if b > 0.0 && a <= 64.0 && x >= -12.0 {
             // The transformed series can still be cheap at small |x|.
             // Certify its cancellation before accepting it: near zeros, or
@@ -127,25 +138,312 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
                 }
             }
         }
-        let (mut term, mut sum, mut correction) = (1.0, 1.0, 0.0);
-        for k in 0..1000 {
-            let k = k as f64;
-            term *= (alpha + k) * argument / ((b + k) * (k + 1.0));
-            let adjusted = term - correction;
-            let next = sum + adjusted;
-            correction = (next - sum) - adjusted;
-            sum = next;
-            if term.abs() <= f64::EPSILON * sum.abs() {
-                return scale * sum;
-            }
+        let alpha = if x < 0.0 {
+            Dd::from(b) - Dd::from(a)
+        } else {
+            Dd::from(a)
+        };
+        if let Some(value) =
+            signed_series_f64(alpha.hi, b, argument).or_else(|| signed_series(alpha, b, argument))
+        {
+            return scale * value;
         }
+        // An uncertified alternating series must not fall back to the same
+        // binary64 sum in the legacy kernel.
+        return f64::NAN;
     }
     crate::specfun::chgm(x, a, b)
+}
+
+// DLMF 13.3.1. Seed M(s,b,x), M(s+1,b,x), 0<s<1, from one
+// positive DD series: M(s+1)=sum + sum(k*term_k)/s. Keeping the low
+// parts of the seeds is essential; binary64 seeds lose many digits here.
+fn negative_numerator<const DYADIC: bool>(a: f64, b: f64, x: f64) -> Option<f64> {
+    numerator_recurrence::<DYADIC, true>(a, b, x)
+        .or_else(|| numerator_recurrence::<DYADIC, false>(a, b, x))
+}
+
+fn numerator_recurrence<const DYADIC: bool, const HYBRID: bool>(
+    a: f64,
+    b: f64,
+    x: f64,
+) -> Option<f64> {
+    let steps = (-a).ceil() as usize;
+    let s = a + steps as f64;
+    let (mut previous, mut current, seed_error, scale) = if s == 0.5 && b == 2.0 {
+        let t = x * 0.5;
+        let square = crate::dd::DdFactor::new(Dd::from(t)).mul(Dd::from(t));
+        let mut tail = Dd::from(0.0);
+        // I1(t)/I0(t) = t/(2 + t²/(4 + t²/(6 + ...))).
+        // For t<=16, 48 levels bound the omitted tail below 1e-34.
+        // A common binary64 Bessel amplitude preserves the DD seed ratio.
+        for k in (2..=48).rev() {
+            let denominator = tail.add_f64(2.0 * k as f64);
+            let q = square.hi / denominator.hi;
+            let product = crate::dd::DdFactor::new(denominator).mul(Dd::from(q));
+            tail = Dd::sum(
+                q,
+                ((square.hi - product.hi) + (square.lo - product.lo)) / denominator.hi,
+            );
+        }
+        let denominator = tail.add_f64(2.0);
+        let q = t / denominator.hi;
+        let product = crate::dd::DdFactor::new(denominator).mul(Dd::from(q));
+        let ratio = Dd::sum(q, ((t - product.hi) - product.lo) / denominator.hi);
+        (
+            ratio.add_f64(1.0),
+            Dd::from(1.0) - ratio,
+            1e-28,
+            x.exp() * bessel::i0e(t),
+        )
+    } else {
+        let (previous, current, error) = positive_seeds::<DYADIC, HYBRID>(s, b, x)?;
+        (previous, current, error, 1.0)
+    };
+    let seed_previous_error = seed_error * previous.hi.abs();
+    let seed_current_error = seed_error * current.hi.abs();
+    let mut coefficients = Vec::with_capacity(steps);
+    for j in 0..steps {
+        // After the initial large values have decayed, try inexpensive
+        // binary64 steps. The adjoint check includes their larger rounding
+        // errors; if it fails, repeat the recurrence entirely in DD.
+        let ordinary = HYBRID && j as f64 > x * 0.5 + 4.0;
+        let (next, ac, bc) = if ordinary {
+            let aj = s - j as f64;
+            let denominator = b - aj;
+            let left = b - 2.0 * aj - x;
+            (
+                Dd::from((left * current.hi + aj * previous.hi) / denominator),
+                left / denominator,
+                aj / denominator,
+            )
+        } else if DYADIC {
+            let aj = s - j as f64;
+            let denominator = b - aj;
+            let left = b - 2.0 * aj - x;
+            (
+                (current.mul_small(16.0 * left) + previous.mul_small(16.0 * aj))
+                    .div_small(16.0 * denominator),
+                left / denominator,
+                aj / denominator,
+            )
+        } else {
+            let aj = Dd::sum(s, -(j as f64));
+            let denominator = Dd::from(b) - aj;
+            let left = Dd::from(b) - aj.mul_small(2.0) - Dd::from(x);
+            (
+                (left * current + aj * previous).div_dd(denominator),
+                left.hi / denominator.hi,
+                aj.hi / denominator.hi,
+            )
+        };
+        coefficients.push((
+            ac,
+            bc,
+            (if ordinary { 16.0 * f64::EPSILON } else { 1e-29 })
+                * ((ac * current.hi).abs() + (bc * previous.hi).abs()),
+        ));
+        previous = current;
+        current = next;
+    }
+    // Propagate sensitivities backwards, retaining their signs. Forward
+    // absolute bounds would spuriously grow exponentially in the oscillatory
+    // region. The adjoint weights bound each local DD rounding contribution.
+    let (mut wc, mut wp, mut error) = (1.0_f64, 0.0_f64, 0.0_f64);
+    for &(ac, bc, local_error) in coefficients.iter().rev() {
+        error += wc.abs() * local_error;
+        (wc, wp) = (wc * ac + wp, wc * bc);
+    }
+    error += wc.abs() * seed_current_error + wp.abs() * seed_previous_error;
+    let value = current.hi + current.lo;
+    if scale != 1.0 {
+        error += 16.0 * f64::EPSILON * value.abs();
+    }
+    (value.is_finite() && error <= 1e-12 * value.abs()).then_some(value * scale)
+}
+
+fn positive_seeds<const DYADIC: bool, const HYBRID: bool>(
+    s: f64,
+    b: f64,
+    x: f64,
+) -> Option<(Dd, Dd, f64)> {
+    let (mut term, mut sum, mut weighted) = (Dd::from(1.0), Dd::from(1.0), Dd::from(0.0));
+    let seed_tolerance = if HYBRID { 1e-26 } else { 1e-32 };
+    let mut converged = false;
+    for k in 0..256 {
+        let kf = k as f64;
+        term = if DYADIC {
+            // Multiples of 1/16 have exact small integer coefficients.
+            // Combine the numerator factors when x is an integer as well.
+            let denominator = (16.0 * b + 16.0 * kf) * (kf + 1.0);
+            if x == x.trunc() {
+                term.mul_div_small((16.0 * s + 16.0 * kf) * x, denominator)
+            } else {
+                term.mul_f64(x)
+                    .mul_div_small(16.0 * s + 16.0 * kf, denominator)
+            }
+        } else {
+            (term * Dd::sum(s, kf))
+                .mul_f64(x)
+                .div_dd(Dd::sum(b, kf).mul_small(kf + 1.0))
+        };
+        // Normalize the seed accumulators once at the end. Their low
+        // components may grow by a few ulps; the 1e-28 roundoff allowance
+        // includes accumulation of those components over at most 256 terms.
+        let leading = Dd::sum(sum.hi, term.hi);
+        sum = Dd {
+            hi: leading.hi,
+            lo: sum.lo + leading.lo + term.lo,
+        };
+        let weight = term.mul_small(kf + 1.0);
+        let leading = Dd::sum(weighted.hi, weight.hi);
+        weighted = Dd {
+            hi: leading.hi,
+            lo: weighted.lo + leading.lo + weight.lo,
+        };
+        if kf > 2.0 * x && weight.hi <= seed_tolerance * weighted.hi {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return None;
+    }
+    sum = Dd::sum(sum.hi, sum.lo);
+    weighted = Dd::sum(weighted.hi, weighted.lo);
+    let previous = sum + weighted.div_dd(Dd::from(s));
+    let current = sum;
+    // For k>2x the seed tail ratios are below 1/2. Ten times the
+    // stopping tolerance covers both tails; 1e-28 covers DD roundoff.
+    let seed_error = 10.0 * seed_tolerance + 1e-28;
+    Some((previous, current, seed_error))
+}
+
+// Normalized Laguerre recurrence, with common binary rescaling so a large
+// intermediate cannot overflow before division by b+n.
+fn laguerre(degree: usize, b: f64, x: f64) -> f64 {
+    let ratio = x / b;
+    if !ratio.is_finite() {
+        return if degree == 1 { 1.0 - ratio } else { f64::NAN };
+    }
+    let (mut previous, mut current) = (Dd::from(1.0), Dd::from(1.0) - Dd::from(x) / Dd::from(b));
+    let mut exponent = 0;
+    for n in 1..degree {
+        let nf = n as f64;
+        let denominator = Dd::sum(b, nf);
+        let factor = Dd::from(1.0) + Dd::sum(nf, -x).div_dd(denominator);
+        let previous_factor = Dd::from(nf).div_dd(denominator);
+        let coefficient = factor.hi.abs().max(previous_factor.hi.abs()).max(1.0);
+        if !coefficient.is_finite() {
+            return f64::NAN;
+        }
+        while current.hi.abs().max(previous.hi.abs()) > 1e280 / coefficient {
+            let scale = 2.0_f64.powi(-512);
+            previous = previous.mul_f64(scale);
+            current = current.mul_f64(scale);
+            exponent += 512;
+        }
+        let next = factor * current - previous_factor * previous;
+        previous = current;
+        current = next;
+    }
+    let value = current.hi + current.lo;
+    if exponent == 0 {
+        value
+    } else {
+        value.signum() * (value.abs().ln() + f64::from(exponent) * std::f64::consts::LN_2).exp()
+    }
+}
+
+// Binary64 pre-pass for `signed_series` with the same stopping rule. Each
+// term carries at most about 8(k+1) roundings (including rounding of `a`)
+// and Neumaier summation keeps accumulation error O(eps|sum|), so accept
+// only when 8 eps sum (k+1)|t_k| meets the DD kernel's 1e-13 target.
+fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum, mut correction) = (1.0_f64, 1.0_f64, 0.0_f64);
+    let mut weighted = 1.0_f64;
+    for k in 0..1000 {
+        let kf = k as f64;
+        term *= (a + kf) * x / ((b + kf) * (kf + 1.0));
+        let next = sum + term;
+        correction += if sum.abs() >= term.abs() {
+            (sum - next) + term
+        } else {
+            (term - next) + sum
+        };
+        sum = next;
+        weighted += (kf + 2.0) * term.abs();
+        if !sum.is_finite() || !weighted.is_finite() {
+            return None;
+        }
+        if term.abs() > 0.0625 * f64::EPSILON * sum.abs() {
+            continue;
+        }
+        let next_a = a + kf + 1.0;
+        let next_b = b + kf + 1.0;
+        let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
+        if next_a > 0.0
+            && next_b > 0.0
+            && ratio_bound < 0.5
+            && term.abs() <= 0.0625 * f64::EPSILON * sum.abs()
+        {
+            let sum = sum + correction;
+            return (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum);
+        }
+    }
+    None
+}
+
+// Double-double defining series for mixed-sign rising factorials. Wait until
+// both parameters are positive and the remaining ratios are bounded by 1/2;
+// a tiny term before a nearby numerator zero does not bound the later tail.
+fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
+    let mut absolute_sum = 1.0;
+    for k in 0..1000 {
+        let kf = k as f64;
+        term = (term * a.add_f64(kf))
+            .mul_f64(x)
+            .div_dd(Dd::sum(b, kf).mul_small(kf + 1.0));
+        sum = sum + term;
+        absolute_sum += term.hi.abs();
+        if !sum.hi.is_finite() || !absolute_sum.is_finite() {
+            return None;
+        }
+        if term.hi.abs() > 1e-25 * sum.hi.abs() {
+            continue;
+        }
+        let next_a = a.add_f64(kf + 1.0).hi;
+        let next_b = b + kf + 1.0;
+        let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
+        if next_a > 0.0
+            && next_b > 0.0
+            && ratio_bound < 0.5
+            && term.hi.abs() <= 1e-25 * sum.hi.abs()
+        {
+            return (absolute_sum * 1e-29 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::hyp1f1;
+
+    #[test]
+    fn negative_numerator_cancellation() {
+        let value =
+            super::negative_numerator::<true>(-50.5, 2.0, 30.0).expect("certified recurrence");
+        assert!((value / 3610.292112991606 - 1.0).abs() < 1e-13, "{value}");
+    }
+
+    #[test]
+    fn recurrence_rejects_uncertainty_near_a_zero() {
+        // 100-digit mpmath root, rounded to binary64. The function value is
+        // about 4.10e-12, too small to certify relatively from these seeds.
+        assert!(super::negative_numerator::<false>(-50.5, 2.0, 29.60332694942178).is_none());
+    }
 
     #[test]
     fn positive_series_stops_after_the_peak() {

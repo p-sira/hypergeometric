@@ -128,6 +128,25 @@ impl Dd {
             lo: lo - (sum - p),
         }
     }
+    /// Product and quotient by exact small integers, with one normalization.
+    /// Requires the same bounds as `mul_small` and `div_small`.
+    #[inline(always)]
+    pub(crate) fn mul_div_small(self, numerator: f64, denominator: f64) -> Self {
+        let product = self.hi * numerator;
+        let (hi, lo) = split(self.hi);
+        let error = ((hi * numerator - product) + lo * numerator) + self.lo * numerator;
+        let q = product / denominator;
+        let p = q * denominator;
+        let (hi, lo) = split(q);
+        let remainder = (product - p) - ((hi * denominator - p) + lo * denominator);
+        let correction = (remainder + error) / denominator;
+        let hi = q + correction;
+        Self {
+            hi,
+            lo: correction - (hi - q),
+        }
+    }
+
     /// Quotient by an exact nonzero integer of magnitude < 2^26.
     /// Requires |self.hi / n| < 1e280.
     #[inline(always)]
