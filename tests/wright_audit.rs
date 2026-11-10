@@ -28,6 +28,37 @@ fn wright_bessel_matches_independent_high_precision_values() {
 }
 
 #[test]
+fn wright_unit_step_gamma_recurrence_matches_bessel_identity() {
+    // 90-digit mpmath 1.3.0, using the independent identity
+    // Phi(1,b;z) = z^((1-b)/2) I_(b-1)(2 sqrt(z)).
+    let reference_log = [
+        (0.0, 0.01, -4.6001743457241728),
+        (0.0, 1.0, 0.46413447354615972),
+        (0.0, 100.0, 19.86653971551339),
+        (0.1, 50.0, 13.638479295234283),
+        (0.5, 100.0, 18.734487876515356),
+        (1.0, 10.0, 4.505084118123957),
+        (1.0, 1000.0, 60.255094572585392),
+        (2.0, 50.0, 9.915088174547206),
+        (3.5, 100.0, 11.672998497591175),
+        (15.5, 1000.0, 8.50584263881101),
+        (0.001, 0.05, -2.950963014992705),
+        (100.0, 0.5, -359.12920549332966),
+    ];
+    for (b, z, want_log) in reference_log {
+        let got = log_wright_bessel(1.0, b, z);
+        assert!(
+            (got - want_log).abs() <= 3e-12 * want_log.abs().max(1.0),
+            "ln Phi(1,{b};{z})={got:.17e} vs {want_log:.17e}"
+        );
+    }
+    // The public domain check rejects b<0 before selecting the recurrence.
+    for b in [-0.5, -1.0, -100.0] {
+        assert!(log_wright_bessel(1.0, b, 2.0).is_nan());
+    }
+}
+
+#[test]
 fn gamma_overflow_stops_a_converged_wright_series() {
     // At this scale the first term is the only term that can affect f64.
     // Every later log-Gamma overflows, although the mathematical sum is finite.

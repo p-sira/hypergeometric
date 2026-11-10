@@ -330,6 +330,33 @@ pub fn log_wright_bessel(a: f64, b: f64, z: f64) -> f64 {
     if z == 0.0 {
         return -lgam(b);
     }
+    // For a=1, Gamma(b+k)=Gamma(b+k-1)*(b+k-1). Reusing this
+    // recurrence removes a Lanczos evaluation for every series term.
+    // Restrict the fast path to moderate arguments, where incrementally
+    // updating the logarithms does not accumulate significant roundoff.
+    if a == 1.0 && b <= 1000.0 && z <= 1000.0 {
+        let lz = z.ln();
+        // At b=0 the k=0 reciprocal-Gamma term vanishes; k=1 is z.
+        let (mut exponent, start) = if b == 0.0 { (lz, 1) } else { (-lgam(b), 0) };
+        let (mut scale, mut sum) = (exponent, 1.0_f64);
+        for k in (start + 1)..100000 {
+            let kf = k as f64;
+            let previous = exponent;
+            exponent += lz - kf.ln() - (b + kf - 1.0).ln();
+            let term = if exponent > scale {
+                sum *= (scale - exponent).exp();
+                scale = exponent;
+                1.0
+            } else {
+                (exponent - scale).exp()
+            };
+            sum += term;
+            if exponent < previous && term <= f64::EPSILON * sum {
+                return scale + sum.ln();
+            }
+        }
+        return f64::NAN;
+    }
     let lz = z.ln();
     let (mut scale, mut sum, mut prev) = (f64::NEG_INFINITY, 0.0_f64, f64::NEG_INFINITY);
     for k in 0..100000 {

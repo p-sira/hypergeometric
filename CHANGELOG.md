@@ -1,18 +1,21 @@
 # Changelog
 
-## 0.1
+## 0.1.2
 
-### 0.1.1
+### Performance
 
-**Performance Improvements**
-- `wright_bessel`, `log_wright_bessel`: Cache 65 independently computed logarithmic factorials for the common low-order Wright series and avoid a redundant exponential in the log-sum-exp update; retain the bounded fallback for higher terms ([#4](https://github.com/p-sira/hypergeometric/pull/4)).
+- Speed up `hyp2f1` continuation for integer parameter differences and noninteger cases near 1 ([#5](https://github.com/p-sira/hypergeometric/pull/5)).
+- Reduce series evaluation costs in `hyp0f1` for large positive arguments, `hyp1f1` for positive and negative arguments, and `hyperu` for integer parameters ([#5](https://github.com/p-sira/hypergeometric/pull/5)).
+- Speed up `log_wright_bessel` when `a = 1` using a log-gamma recurrence ([#5](https://github.com/p-sira/hypergeometric/pull/5)).
 
-**Tests**
-- Add 90-digit independent mpmath references for the Wright series arguments in Sci's Divan benchmark, including values and logarithms.
-- Retain the existing domain, convergence and numerical-accuracy regressions.
+## 0.1.1
 
-### 0.1.0
+### Performance
 
-**New Features**
-- Initial standalone extraction of real 0F1, 1F1, 2F1, Tricomi U, Wright generalized Bessel, and Wright omega functions from Sci.
-- Add independent numerical reference datasets and accuracy tests.
+- Speed up low-order series in `wright_bessel` and `log_wright_bessel` by caching logarithmic factorials and reducing exponential evaluations ([#4](https://github.com/p-sira/hypergeometric/pull/4)).
+
+## 0.1.0
+
+### Added
+
+- Initial release of real 0F1, 1F1, 2F1, Tricomi U, Wright generalized Bessel, and Wright omega functions, extracted from Sci.

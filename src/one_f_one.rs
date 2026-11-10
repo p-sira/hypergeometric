@@ -108,10 +108,22 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
                 if !sum.is_finite() {
                     break;
                 }
-                // Do not stop before the terms have passed their maximum.
-                // For k > argument + alpha the next-term ratio is < 1.
-                if k > argument + alpha && term <= f64::EPSILON * sum {
-                    return scale * sum;
+                if term <= f64::EPSILON * sum {
+                    if alpha <= b {
+                        // Retain the proven inexpensive stopping rule for
+                        // the original parameter regime.
+                        if k > argument + alpha {
+                            return scale * sum;
+                        }
+                    } else {
+                        // For alpha > b the ratios decrease monotonically.
+                        // Bound the geometric tail to stop safely before
+                        // the old conservative k > argument + alpha limit.
+                        let ratio = (alpha + k + 1.0) * argument / ((b + k + 1.0) * (k + 2.0));
+                        if ratio < 1.0 && term * ratio <= f64::EPSILON * sum * (1.0 - ratio) {
+                            return scale * sum;
+                        }
+                    }
                 }
             }
         }
@@ -129,4 +141,43 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
         }
     }
     crate::specfun::chgm(x, a, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hyp1f1;
+
+    #[test]
+    fn positive_series_stops_after_the_peak() {
+        // Kummer's identity turns M(64,2,z) into the finite polynomial
+        // exp(z) M(-62,2,-z); all polynomial terms are positive for z > 0.
+        for z in [0.75, 2.0, 10.0] {
+            let (mut term, mut polynomial) = (1.0, 1.0);
+            for k in 0..62 {
+                let k = f64::from(k);
+                term *= (k - 62.0) * -z / ((k + 2.0) * (k + 1.0));
+                polynomial += term;
+            }
+            let expected = z.exp() * polynomial;
+            let actual = hyp1f1(64.0, 2.0, z);
+            assert!(
+                (actual / expected - 1.0).abs() <= 3e-14,
+                "z={z}: {actual} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn positive_series_small_numerator_relative_to_denominator() {
+        // M(1,2,z) = expm1(z)/z, including arguments where many positive
+        // terms must be added before the series enters its decreasing tail.
+        for z in [2.0_f64, 100.0, 200.0] {
+            let expected = z.exp_m1() / z;
+            let actual = hyp1f1(1.0, 2.0, z);
+            assert!(
+                (actual / expected - 1.0).abs() <= 3e-14,
+                "z={z}: {actual} vs {expected}"
+            );
+        }
+    }
 }
