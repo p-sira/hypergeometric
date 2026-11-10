@@ -7,7 +7,10 @@ use hypergeometric::{
 #[test]
 fn high_precision_grid_and_boundary_regressions() {
     let mut count = 0;
-    for line in include_str!("fixtures/numerical_audit.csv").lines() {
+    for line in include_str!("fixtures/numerical_audit.csv")
+        .lines()
+        .chain(include_str!("fixtures/hyp1f1_recurrence.csv").lines())
+    {
         let (name, values) = line.split_once(',').unwrap();
         let values: Vec<f64> = values.split(',').map(|s| s.parse().unwrap()).collect();
         let want = *values.last().unwrap();
@@ -34,7 +37,7 @@ fn high_precision_grid_and_boundary_regressions() {
         }
         count += 1;
     }
-    assert!(count >= 1900, "unexpected fixture count: {count}");
+    assert!(count >= 2500, "unexpected fixture count: {count}");
 }
 
 fn assert_reference(got: f64, want: f64, rtol: f64, case: &str) {

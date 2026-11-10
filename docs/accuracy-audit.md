@@ -60,6 +60,33 @@ The identities follow [DLMF §13.3](https://dlmf.nist.gov/13.3),
 [Gauss series](https://dlmf.nist.gov/15.2), and
 [Pfaff's transformations](https://dlmf.nist.gov/15.8#E1).
 
+## Follow-up: noninteger negative numerator recurrence
+
+`M(-50.5,2,30)` has the reference value
+`3610.2921129916062610002306348454185`. The original defining series
+returned an incorrect result; the first audit fix rejected it as unresolved.
+
+A bounded parameter recurrence now evaluates noninteger `-128<a<-16`,
+`2<=b<=64`, `8<=z<=32`. Two double-double seeds come from a shared positive
+series. Backward sensitivity weights estimate how seed truncation and each
+recurrence step affect the final result. Binary64 steps after the initial
+large values have decayed are accepted only when the estimated relative
+error is at most `1e-12`; otherwise the calculation retries entirely in
+double-double. Unresolved cases retain the existing series fallback.
+Exact coefficients on a 1/16 parameter grid use small integer arithmetic.
+
+An additional 558 references cover random parameters, the integer coefficient
+path, boundaries, and inputs immediately adjacent to terminating numerators.
+They agree at 90 and 180 decimal digits, and the largest observed relative
+error is `2.46e-14`. A separate regression checks rejection near a zero.
+The combined audit contains 2,500 reference cases.
+
+The unchanged cancellation benchmark measured approximately `3.38 us` at
+CodSpeed's `0552a1c` commit and `3.12 us` with the recurrence on the same
+local machine and toolchain (median, 100–200 samples of 1,000 iterations).
+This is about 8% less time while returning a finite accurate value. These
+are local wall-clock measurements; CodSpeed simulation results are separate.
+
 ## Reproduction and limits
 
 ```sh

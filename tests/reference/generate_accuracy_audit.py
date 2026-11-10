@@ -95,10 +95,26 @@ def reference(name, args):
     return getattr(mp, name)(*args)
 
 
-def main():
+def recurrence_cases():
+    rng = random.Random(20261111)
+    yield "hyp1f1", [-50.5, 2.0, 30.0]
+    for _ in range(256):
+        yield "hyp1f1", [rng.uniform(-128, -16), rng.uniform(2, 64), rng.uniform(8, 32)]
+        a = -rng.randrange(257, 2048) / 16
+        if a == int(a):
+            a -= 1 / 16
+        yield "hyp1f1", [a, rng.randrange(32, 1025) / 16, rng.randrange(128, 513) / 16]
+    for a in [-127.875, -50.5, -16.125, math.nextafter(-50.0, -math.inf),
+              math.nextafter(-50.0, 0.0)]:
+        for b in [2.0, 2.5, 64.0]:
+            for x in [8.0, 30.0, 32.0]:
+                yield "hyp1f1", [a, b, x]
+
+
+def write_references(inputs, filename):
     rows = []
     excluded = 0
-    for name, args in cases():
+    for name, args in inputs:
         try:
             with mp.workdps(90):
                 low = float(reference(name, args))
@@ -109,10 +125,15 @@ def main():
             continue
         assert low == high, (name, args, low, high)
         rows.append([name, *args, high])
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "numerical_audit.csv"
+    path = Path(__file__).resolve().parents[1] / "fixtures" / filename
     with path.open("w", newline="") as output:
         csv.writer(output, lineterminator="\n").writerows(rows)
-    print(f"Wrote {len(rows)} cases; excluded {excluded} complex results")
+    print(f"Wrote {len(rows)} cases to {filename}; excluded {excluded} complex results")
+
+
+def main():
+    write_references(cases(), "numerical_audit.csv")
+    write_references(recurrence_cases(), "hyp1f1_recurrence.csv")
 
 
 if __name__ == "__main__":
