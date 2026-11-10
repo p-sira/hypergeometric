@@ -4,9 +4,8 @@
 
 ### Performance
 
-- Reduce `hyp2f1` series work using certified geometric-tail termination in binary64 and double-double precision, and a certified ordinary-sum path for positive parameters.
-- Reduce `hyp1f1` cancellation fallback costs with compensated fused residuals, guarded by a conservative roundoff estimate and the existing double-double fallback.
-- Add independent high-precision tests over off-grid mixed-sign series inputs and Sci's 1,000-case `hyp2f1` workload.
+- `hyp2f1`: reduce series work using certified geometric-tail termination in binary64 and double-double precision, and a certified ordinary-sum path for positive parameters ([#8](https://github.com/p-sira/hypergeometric/pull/8)).
+- `hyp1f1`: reduce cancellation fallback costs with compensated fused residuals, guarded by a conservative roundoff estimate and the existing double-double fallback ([#8](https://github.com/p-sira/hypergeometric/pull/8)).
 
 ## 0.1.3
 
