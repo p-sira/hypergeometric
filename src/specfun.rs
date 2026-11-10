@@ -542,15 +542,15 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         let kf = k as f64;
         let numerator = (a + kf) * (b + kf);
         if numerator == 0.0 {
-            return certify(sum + correction, weighted);
+            return certify(sum, weighted);
         }
         term *= numerator * x / ((c + kf) * (kf + 1.0));
-        let next = sum + term;
-        correction += if sum.abs() >= term.abs() {
-            (sum - next) + term
-        } else {
-            (term - next) + sum
-        };
+        // Kahan compensation avoids a magnitude comparison in every term.
+        // The certificate below also covers the O(eps * sum |t_k|)
+        // accumulation error of compensated summation.
+        let adjusted = term - correction;
+        let next = sum + adjusted;
+        correction = (next - sum) - adjusted;
         sum = next;
         weighted += (kf + 2.0) * term.abs();
         if !weighted.is_finite() || !sum.is_finite() {
@@ -569,7 +569,7 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
             && bound < 1.0
             && term.abs() <= 0.5 * f64::EPSILON * (1.0 - bound) * sum.abs()
         {
-            return certify(sum + correction, weighted);
+            return certify(sum, weighted);
         }
     }
     None

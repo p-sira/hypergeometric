@@ -81,6 +81,78 @@ mod hyp2f1_bench {
     }
 }
 
+/// Match the deterministic inputs in Sci's `special_scipy` and `modules`
+/// benchmark suites so backend upgrades can be checked before release.
+mod sci_workloads {
+    use super::*;
+
+    fn values(n: usize, seed: u64) -> Vec<f64> {
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (0..n)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    fn range(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
+        values(n, seed)
+            .into_iter()
+            .map(|v| lo + (hi - lo) * (0.5 * (v + 1.0).clamp(1e-6, 2.0 - 1e-6)))
+            .collect()
+    }
+
+    #[divan::bench]
+    fn hyp1f1_scipy(bencher: divan::Bencher) {
+        let a = range(256, 52, -3.0, 3.0);
+        let b = range(256, 53, 0.5, 5.0);
+        let x = range(256, 54, -5.0, 5.0);
+        bencher.bench(|| {
+            black_box(&a)
+                .iter()
+                .zip(black_box(&b))
+                .zip(black_box(&x))
+                .map(|((&a, &b), &x)| hyp1f1(a, b, x))
+                .sum::<f64>()
+        });
+    }
+
+    #[divan::bench]
+    fn hyp2f1_scipy(bencher: divan::Bencher) {
+        let a = range(256, 55, -2.0, 2.0);
+        let b = range(256, 56, -2.0, 2.0);
+        let c = range(256, 57, 0.5, 5.0);
+        let x = range(256, 58, -0.9, 0.9);
+        bencher.bench(|| {
+            (0..x.len())
+                .map(|i| {
+                    hyp2f1(
+                        black_box(&a)[i],
+                        black_box(&b)[i],
+                        black_box(&c)[i],
+                        black_box(&x)[i],
+                    )
+                })
+                .sum::<f64>()
+        });
+    }
+
+    #[divan::bench]
+    fn hyp2f1_modules(bencher: divan::Bencher) {
+        let x: Vec<_> = values(1_000, 9).into_iter().map(|v| 0.9 * v).collect();
+        bencher.bench(|| {
+            x.iter()
+                .map(|&v| hyp2f1(0.5, 1.5, 2.5, black_box(v)))
+                .sum::<f64>()
+        });
+    }
+}
+
 mod hyperu_bench {
     use super::*;
 
