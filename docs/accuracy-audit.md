@@ -75,17 +75,26 @@ error is at most `1e-12`; otherwise the calculation retries entirely in
 double-double. Unresolved cases retain the existing series fallback.
 Exact coefficients on a 1/16 parameter grid use small integer arithmetic.
 
-An additional 558 references cover random parameters, the integer coefficient
+An additional 878 references cover random parameters, the integer coefficient
 path, boundaries, and inputs immediately adjacent to terminating numerators.
 They agree at 90 and 180 decimal digits, and the largest observed relative
 error is `2.46e-14`. A separate regression checks rejection near a zero.
-The combined audit contains 2,500 reference cases.
+The combined audit contains 2,820 reference cases.
 
-The unchanged cancellation benchmark measured approximately `3.38 us` at
-CodSpeed's `0552a1c` commit and `3.12 us` with the recurrence on the same
-local machine and toolchain (median, 100–200 samples of 1,000 iterations).
-This is about 8% less time while returning a finite accurate value. These
-are local wall-clock measurements; CodSpeed simulation results are separate.
+For half-integer numerators with `b=2`, the seeds use the modified Bessel
+identities `M(1/2,2,x)=exp(x/2)(I0(x/2)-I1(x/2))` and the corresponding
+sum for `M(3/2,2,x)`. A 48-level double-double continued fraction computes
+`I1/I0`; the installed Bessel dependency supplies a common binary64 amplitude.
+This preserves the seed ratio through cancellation. Seed accumulators are
+normalized once, and recurrence weights use a buffer sized to the actual
+number of steps, avoiding initialization of overwritten scratch entries.
+See [DLMF 10.33.1](https://dlmf.nist.gov/10.33#E1) for the continued fraction.
+
+The unchanged cancellation benchmark's local simulated cost decreased about
+58% against CodSpeed's `0552a1c`, using the same Valgrind CodSpeed build,
+Rust toolchain, and profiling options. The result now remains finite and
+accurate. This does not imply parity with `main`, which returned an incorrect
+value; CodSpeed's CI comparison against `main` is tracked separately.
 
 ## Reproduction and limits
 

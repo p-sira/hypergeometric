@@ -104,6 +104,11 @@ def recurrence_cases():
         if a == int(a):
             a -= 1 / 16
         yield "hyp1f1", [a, rng.randrange(32, 1025) / 16, rng.randrange(128, 513) / 16]
+    # Half-integer seeds use a Bessel ratio, including non-grid arguments.
+    for _ in range(64):
+        a = -rng.randrange(17, 128) - 0.5
+        for x in [8.0, 30.0, 32.0, rng.uniform(8, 32), rng.uniform(8, 32)]:
+            yield "hyp1f1", [a, 2.0, x]
     for a in [-127.875, -50.5, -16.125, math.nextafter(-50.0, -math.inf),
               math.nextafter(-50.0, 0.0)]:
         for b in [2.0, 2.5, 64.0]:
