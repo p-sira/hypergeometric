@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4
+
+### Performance
+
+- `hyp2f1`: reduce series work using certified geometric-tail termination in binary64 and double-double precision, and a certified ordinary-sum path for positive parameters ([#8](https://github.com/p-sira/hypergeometric/pull/8)).
+- `hyp1f1`: reduce cancellation fallback costs with compensated fused residuals, guarded by a conservative roundoff estimate and the existing double-double fallback ([#8](https://github.com/p-sira/hypergeometric/pull/8)).
+
 ## 0.1.3
 
 ### Performance

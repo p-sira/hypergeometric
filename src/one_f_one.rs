@@ -66,33 +66,37 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     // of summing exponentially larger alternating terms at the target.
     if a > 0.0 && b < a && (-1000.0..0.0).contains(&x) && (-64.0..=64.0).contains(&b) {
         if b > 0.0 && a <= 64.0 && x >= -12.0 {
-            // The transformed series can still be cheap at small |x|.
-            // Certify its cancellation before accepting it: near zeros, or
-            // when large terms cancel, keep the outward continuation.
-            let (mut term, mut sum, mut correction, mut absolute_sum) = (1.0, 1.0, 0.0, 1.0);
-            for k in 1..=256 {
-                let kf = k as f64;
-                term *= (b - a + kf - 1.0) * -x / ((b + kf - 1.0) * kf);
-                let adjusted = term - correction;
-                let next = sum + adjusted;
-                correction = (next - sum) - adjusted;
-                sum = next;
-                absolute_sum += term.abs();
-                if !sum.is_finite() || !absolute_sum.is_finite() {
-                    break;
+            let alpha = Dd::from(b) - Dd::from(a);
+            if alpha.lo == 0.0 {
+                if let Some(value) = signed_series_f64(alpha.hi, b, -x) {
+                    return x.exp() * value;
                 }
-                let next_ratio = (b - a + kf).abs() * -x / ((b + kf) * (kf + 1.0));
-                // The consecutive-term ratio has passed its maximum by
-                // k > 2(a-b)+b+1, so the remaining tail is geometric.
-                if kf > 2.0 * (a - b) + b + 1.0
-                    && next_ratio <= 0.5
-                    && term.abs() <= 0.125 * f64::EPSILON * sum.abs()
-                {
-                    let error_bound = (8.0 * kf + 2.0) * f64::EPSILON * absolute_sum;
-                    if error_bound <= 1e-12 * sum.abs() {
-                        return x.exp() * sum;
+            } else {
+                // Preserve the compensated, conservative pre-pass when
+                // subtracting the two input parameters loses low bits.
+                let (mut term, mut sum, mut correction, mut absolute_sum) = (1.0, 1.0, 0.0, 1.0);
+                for k in 1..=256 {
+                    let kf = k as f64;
+                    term *= (b - a + kf - 1.0) * -x / ((b + kf - 1.0) * kf);
+                    let adjusted = term - correction;
+                    let next = sum + adjusted;
+                    correction = (next - sum) - adjusted;
+                    sum = next;
+                    absolute_sum += term.abs();
+                    if !sum.is_finite() || !absolute_sum.is_finite() {
+                        break;
                     }
-                    break;
+                    let next_ratio = (b - a + kf).abs() * -x / ((b + kf) * (kf + 1.0));
+                    if kf > 2.0 * (a - b) + b + 1.0
+                        && next_ratio <= 0.5
+                        && term.abs() <= 0.125 * f64::EPSILON * sum.abs()
+                    {
+                        let error_bound = (8.0 * kf + 2.0) * f64::EPSILON * absolute_sum;
+                        if error_bound <= 1e-12 * sum.abs() {
+                            return x.exp() * sum;
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -119,21 +123,17 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
                 if !sum.is_finite() {
                     break;
                 }
-                if term <= f64::EPSILON * sum {
-                    if alpha <= b {
-                        // Retain the proven inexpensive stopping rule for
-                        // the original parameter regime.
-                        if k > argument + alpha {
-                            return scale * sum;
-                        }
+                if term <= 1e-14 * sum {
+                    // Bound every later term by a decreasing geometric
+                    // ratio. For alpha <= b, the rising-factor ratio is
+                    // below one; otherwise it decreases toward one.
+                    let ratio = if alpha <= b {
+                        argument / (k + 2.0)
                     } else {
-                        // For alpha > b the ratios decrease monotonically.
-                        // Bound the geometric tail to stop safely before
-                        // the old conservative k > argument + alpha limit.
-                        let ratio = (alpha + k + 1.0) * argument / ((b + k + 1.0) * (k + 2.0));
-                        if ratio < 1.0 && term * ratio <= f64::EPSILON * sum * (1.0 - ratio) {
-                            return scale * sum;
-                        }
+                        (alpha + k + 1.0) * argument / ((b + k + 1.0) * (k + 2.0))
+                    };
+                    if ratio < 1.0 && term * ratio <= 1e-14 * sum * (1.0 - ratio) {
+                        return scale * sum;
                     }
                 }
             }
@@ -143,8 +143,9 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
         } else {
             Dd::from(a)
         };
-        if let Some(value) =
-            signed_series_f64(alpha.hi, b, argument).or_else(|| signed_series(alpha, b, argument))
+        if let Some(value) = signed_series_f64(alpha.hi, b, argument)
+            .or_else(|| signed_series_twofold(alpha, b, argument))
+            .or_else(|| signed_series(alpha, b, argument))
         {
             return scale * value;
         }
@@ -394,6 +395,83 @@ fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
     None
 }
 
+// The fast f64 sum can reject a modest cancellation even when its actual
+// rounding error is small. On normal-sized inputs, retain the low term bits
+// with FMA residuals and a compensated sum. Unsafe magnitudes or unresolved
+// cancellation fall through to the general double-double implementation.
+fn signed_series_twofold(a: Dd, b: f64, x: f64) -> Option<f64> {
+    if a.lo != 0.0 || b <= 0.0 || x <= 0.0 {
+        return None;
+    }
+    let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
+    let mut absolute_sum = 1.0;
+    for k in 0..128 {
+        let kf = k as f64;
+        let numerator_factor = Dd::sum(a.hi, kf);
+        let denominator_factor = Dd::sum(b, kf);
+        let next_k = kf + 1.0;
+        let numerator = numerator_factor.hi * x;
+        let denominator = denominator_factor.hi * next_k;
+        // Keep the residual products far from underflow. This makes FMA's
+        // error-free product identity valid throughout the fast path.
+        if numerator.abs() < 1e-100 || denominator.abs() < 1e-100 {
+            return None;
+        }
+        let numerator_low = numerator_factor.hi.mul_add(x, -numerator) + numerator_factor.lo * x;
+        let denominator_low =
+            denominator_factor.hi.mul_add(next_k, -denominator) + denominator_factor.lo * next_k;
+        let ratio = numerator / denominator;
+        if !ratio.is_finite() || ratio.abs() < 1e-100 {
+            return None;
+        }
+        let ratio_low = ((-ratio).mul_add(denominator, numerator) + numerator_low
+            - ratio * denominator_low)
+            / denominator;
+        let product = term.hi * ratio;
+        if !product.is_finite() || product.abs() < 1e-100 {
+            return None;
+        }
+        let product_low =
+            term.hi.mul_add(ratio, -product) + (term.hi * ratio_low + term.lo * ratio);
+        term = Dd::sum(product, product_low);
+        let leading = Dd::sum(sum.hi, term.hi);
+        sum = Dd {
+            hi: leading.hi,
+            lo: sum.lo + leading.lo + term.lo,
+        };
+        absolute_sum += term.hi.abs();
+        if !term.lo.is_finite()
+            || !sum.hi.is_finite()
+            || !sum.lo.is_finite()
+            || !absolute_sum.is_finite()
+        {
+            return None;
+        }
+        let value = sum.hi + sum.lo;
+        if term.hi.abs() > 1e-13 * value.abs() {
+            continue;
+        }
+        let next_a = a.hi + kf + 1.0;
+        let next_b = b + kf + 1.0;
+        if next_a <= 0.0 || next_b <= 0.0 {
+            continue;
+        }
+        let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
+        if ratio_bound < 0.5 {
+            let tail = (term.hi.abs() + term.lo.abs()) * ratio_bound / (1.0 - ratio_bound);
+            // The normal-range FMA and TwoSum residuals leave second-order
+            // error. Even 2^16*u²*(129)² < 2e-23 for u=EPSILON/2; 1e-18
+            // allows five further orders of margin over 128 steps.
+            // Reserve 1e-15 relative for the final sum rounding and for
+            // rounding the geometric-tail bound itself.
+            if absolute_sum * 1e-18 + tail <= (1e-13 - 1e-15) * value.abs() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 // Double-double defining series for mixed-sign rising factorials. Wait until
 // both parameters are positive and the remaining ratios are bounded by 1/2;
 // a tiny term before a nearby numerator zero does not bound the later tail.
@@ -432,6 +510,106 @@ fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::hyp1f1;
+    use crate::dd::Dd;
+
+    #[test]
+    fn compensated_signed_series_certifies_moderate_cancellation() {
+        // Independently rounded 120-digit references from exact f64 inputs.
+        let cases = [
+            (
+                -1.3624479232633842,
+                2.779414522533803,
+                2.401477750033653,
+                -0.024129233530862616,
+            ),
+            (
+                -1.409323039967362,
+                1.0665125091382974,
+                4.866705107226926,
+                -0.4787573723216197,
+            ),
+            (
+                -1.9387549173088974,
+                2.396539836889558,
+                1.6603241372461959,
+                -0.032393526086455737,
+            ),
+            (
+                -0.9064372616317158,
+                3.1845953908784894,
+                3.4422638399572563,
+                -0.030362375509546704,
+            ),
+            (
+                -2.5941640709632896,
+                4.700071950817057,
+                2.9905932330146268,
+                -0.024037366615171897,
+            ),
+            (
+                -2.2967123841077215,
+                4.798076079147022,
+                2.930414325277413,
+                0.035876428396034749,
+            ),
+            (
+                -2.398706413158903,
+                2.1047503333068107,
+                1.1300677255173301,
+                0.027518736140837587,
+            ),
+        ];
+        for (a, b, x, expected) in cases {
+            let value = super::signed_series_twofold(Dd::from(a), b, x)
+                .expect("moderate cancellation is certifiable");
+            assert!(
+                (value - expected).abs() <= 1e-13 * expected.abs(),
+                "{a}, {b}, {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn compensated_signed_series_rejects_near_zero_and_subnormal_inputs() {
+        let a = Dd::from(-1.3624479232633842);
+        let b = 2.779414522533803;
+        for x in [2.3337419710314586, 2.3337419710314591, 2.3337419710314595] {
+            assert!(super::signed_series_twofold(a, b, x).is_none(), "x={x}");
+        }
+        assert!(super::signed_series_twofold(Dd::from(-0.5), 2.0, 1e-200).is_none());
+    }
+
+    #[test]
+    fn compensated_signed_series_matches_double_double_holdout() {
+        // Broad independent holdout, including negative and positive
+        // numerator parameters and arguments outside the Sci benchmark.
+        let mut state = 0x15ed_5eed_1f1a_2026_u64;
+        let mut draws = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let mut matched = 0;
+        for _ in 0..512 {
+            let a = -12.0 + 24.0 * draws();
+            let b = 0.1 + 20.0 * draws();
+            let x = 0.01 + 25.0 * draws();
+            let a = Dd::from(a);
+            if let (Some(quick), Some(reference)) = (
+                super::signed_series_twofold(a, b, x),
+                super::signed_series(a, b, x),
+            ) {
+                assert!(
+                    (quick - reference).abs() <= 2e-13 * reference.abs(),
+                    "a={} b={b} x={x}: {quick} vs {reference}",
+                    a.hi
+                );
+                matched += 1;
+            }
+        }
+        assert!(matched >= 200, "too few certified holdout cases: {matched}");
+    }
 
     #[test]
     fn negative_numerator_cancellation() {
