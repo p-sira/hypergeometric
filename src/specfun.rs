@@ -12,6 +12,7 @@ const HYP2F1_EPS: f64 = 1e-13;
 const HYP2F1_ETHRESH: f64 = 1e-12;
 const HYP2F1_MAXITER: i32 = 10000;
 const MACHEP: f64 = f64::EPSILON * 0.5;
+
 #[inline]
 fn neg_one_pow(k: i32) -> f64 {
     if k % 2 == 0 { 1.0 } else { -1.0 }
@@ -529,25 +530,19 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
 
 // Binary64 defining series with a first-order rounding-error certificate.
 // Each term carries at most about 8(k+1) roundings relative to the exact
-// term and Neumaier summation keeps the accumulation error O(eps|sum|), so
-// 8 eps sum (k+1)|t_k| bounds the error. Accept only when that certificate
-// meets the same 1e-13 target as the DD kernel; otherwise fall back to DD.
+// term. Kahan summation keeps the accumulation error O(eps * sum |t_k|),
+// covered by 8 eps sum (k+1)|t_k|. Account for the remaining geometric tail
+// before accepting the result at the 1e-13 target.
 fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
     let (mut term, mut sum, mut correction) = (1.0_f64, 1.0_f64, 0.0_f64);
     let mut weighted = 1.0_f64;
-    let certify = |sum: f64, weighted: f64| {
-        (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum)
-    };
     for k in 0..10000 {
         let kf = k as f64;
         let numerator = (a + kf) * (b + kf);
         if numerator == 0.0 {
-            return certify(sum, weighted);
+            return (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum);
         }
         term *= numerator * x / ((c + kf) * (kf + 1.0));
-        // Kahan compensation avoids a magnitude comparison in every term.
-        // The certificate below also covers the O(eps * sum |t_k|)
-        // accumulation error of compensated summation.
         let adjusted = term - correction;
         let next = sum + adjusted;
         correction = (next - sum) - adjusted;
@@ -556,20 +551,56 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         if !weighted.is_finite() || !sum.is_finite() {
             return None;
         }
-        // Since 0 <= bound, test the cheap necessary size condition before
-        // forming the tail-ratio bound and its divisions.
-        if term.abs() > 0.5 * f64::EPSILON * sum.abs() {
+        let target = 1e-13 * sum.abs();
+        let roundoff = 8.0 * f64::EPSILON * weighted;
+        // Use a conservative size screen to avoid tail-ratio divisions
+        // while the series terms are still relatively large.
+        if term.abs() > target {
             continue;
         }
         let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
-        let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
-        if an > 0.0
-            && bn > 0.0
-            && cn > 0.0
-            && bound < 1.0
-            && term.abs() <= 0.5 * f64::EPSILON * (1.0 - bound) * sum.abs()
-        {
-            return certify(sum, weighted);
+        if an > 0.0 && bn > 0.0 && cn > 0.0 {
+            // For all later terms, each positive Pochhammer ratio lies
+            // between its next value and one. This bounds the entire tail.
+            let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
+            if bound < 1.0 {
+                let tail = term.abs() * bound / (1.0 - bound);
+                if tail + roundoff <= target {
+                    return Some(sum);
+                }
+                // The certified roundoff exceeds the budget even when the
+                // entire remaining tail is negligible: switch to DD now.
+                if tail < 0.01 * target && roundoff > 1.01 * target {
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
+
+// A positive defining series cannot cancel, so ordinary summation suffices
+// when its accumulated rounding bound and the remaining tail fit 1e-13.
+fn hys2f1_positive_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum, mut weighted) = (1.0_f64, 1.0_f64, 1.0_f64);
+    for k in 0..10000 {
+        let kf = k as f64;
+        term *= (a + kf) * (b + kf) * x / ((c + kf) * (kf + 1.0));
+        sum += term;
+        weighted += (kf + 2.0) * term;
+        if !sum.is_finite() || !weighted.is_finite() {
+            return None;
+        }
+        let target = 1e-13 * sum;
+        if term > target {
+            continue;
+        }
+        let n = kf + 2.0;
+        let nu = n * f64::EPSILON;
+        let roundoff = 8.0 * f64::EPSILON * weighted + nu / (1.0 - nu) * sum;
+        let bound = x * ((a + n - 1.0) / (c + n - 1.0)).max(1.0) * ((b + n - 1.0) / n).max(1.0);
+        if bound < 1.0 && term * bound / (1.0 - bound) + roundoff <= target {
+            return Some(sum);
         }
     }
     None
@@ -595,19 +626,17 @@ fn hys2f1_dd(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         if !sum.hi.is_finite() || !absolute_sum.is_finite() {
             return None;
         }
-        if term.hi.abs() > 1e-25 * sum.hi.abs() {
+        let target = 1e-13 * sum.hi.abs();
+        if term.hi.abs() > target {
             continue;
         }
         let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
-        // Each ratio is bounded by its current value or its limit one.
-        let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
-        if an > 0.0
-            && bn > 0.0
-            && cn > 0.0
-            && bound < 1.0
-            && term.hi.abs() <= 1e-25 * (1.0 - bound) * sum.hi.abs()
-        {
-            return (absolute_sum * 1e-28 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        if an > 0.0 && bn > 0.0 && cn > 0.0 {
+            let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
+            if bound < 1.0 && term.hi.abs() * bound / (1.0 - bound) + absolute_sum * 1e-28 <= target
+            {
+                return Some(sum.hi + sum.lo);
+            }
         }
     }
     None
@@ -619,6 +648,12 @@ pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
         && x.abs() < 1.0
     {
         if let Some(value) = hys2f1_f64(a, b, c, x).or_else(|| hys2f1_dd(a, b, c, x)) {
+            loss[0] = 1e-13;
+            return value;
+        }
+    }
+    if a > 0.0 && b > 0.0 && c > 0.0 && x >= 0.0 && x < 1.0 && a.max(b).max(c) <= 128.0 {
+        if let Some(value) = hys2f1_positive_f64(a, b, c, x) {
             loss[0] = 1e-13;
             return value;
         }

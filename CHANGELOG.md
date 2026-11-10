@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+### Performance
+
+- Reduce `hyp2f1` series work using certified geometric-tail termination in binary64 and double-double precision, and a certified ordinary-sum path for positive parameters.
+- Reduce `hyp1f1` cancellation fallback costs with compensated fused residuals, guarded by a conservative roundoff estimate and the existing double-double fallback.
+- Add independent high-precision tests over off-grid mixed-sign series inputs and Sci's 1,000-case `hyp2f1` workload.
+
 ## 0.1.3
 
 ### Performance
