@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+### Performance
+
+- `hyp1f1`: shorten mixed-sign series with certified geometric-tail bounds, cheaper binary64 accumulation, and earlier double-double convergence.
+- `hyp2f1`: reduce compensation overhead in the binary64 series while retaining its error certificate and double-double fallback.
+- Add benchmarks matching Sci's `hyp1f1` and `hyp2f1` workloads, with independent high-precision references for the `hyp2f1` input grid.
+
 ## 0.1.2
 
 ### Fixed

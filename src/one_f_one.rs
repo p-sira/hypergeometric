@@ -355,40 +355,40 @@ fn laguerre(degree: usize, b: f64, x: f64) -> f64 {
     }
 }
 
-// Binary64 pre-pass for `signed_series` with the same stopping rule. Each
-// term carries at most about 8(k+1) roundings (including rounding of `a`)
-// and Neumaier summation keeps accumulation error O(eps|sum|), so accept
-// only when 8 eps sum (k+1)|t_k| meets the DD kernel's 1e-13 target.
+// Binary64 pre-pass for `signed_series`. The weighted sum bounds both term
+// evaluation and ordinary summation roundoff by 8 eps sum (k+1)|t_k|.
+// Once the rising factors are positive, the next-term ratio is decreasing;
+// a geometric tail bound lets us stop as soon as the total error is small.
 fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
-    let (mut term, mut sum, mut correction) = (1.0_f64, 1.0_f64, 0.0_f64);
-    let mut weighted = 1.0_f64;
+    let (mut term, mut sum, mut weighted) = (1.0_f64, 1.0_f64, 1.0_f64);
     for k in 0..1000 {
         let kf = k as f64;
         term *= (a + kf) * x / ((b + kf) * (kf + 1.0));
-        let next = sum + term;
-        correction += if sum.abs() >= term.abs() {
-            (sum - next) + term
-        } else {
-            (term - next) + sum
-        };
-        sum = next;
+        sum += term;
         weighted += (kf + 2.0) * term.abs();
         if !sum.is_finite() || !weighted.is_finite() {
             return None;
         }
-        if term.abs() > 0.0625 * f64::EPSILON * sum.abs() {
+        if term.abs() > 1e-13 * sum.abs() {
             continue;
         }
         let next_a = a + kf + 1.0;
         let next_b = b + kf + 1.0;
+        if next_a <= 0.0 || next_b <= 0.0 {
+            continue;
+        }
         let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
-        if next_a > 0.0
-            && next_b > 0.0
-            && ratio_bound < 0.5
-            && term.abs() <= 0.0625 * f64::EPSILON * sum.abs()
-        {
-            let sum = sum + correction;
-            return (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum);
+        if ratio_bound < 0.5 {
+            let tail = term.abs() * ratio_bound / (1.0 - ratio_bound);
+            let roundoff = 8.0 * f64::EPSILON * weighted;
+            if roundoff + tail <= 1e-13 * sum.abs() {
+                return Some(sum);
+            }
+            // All subsequent terms fit inside this tail and weighted only
+            // increases, so an uncertifiable sum cannot become certifiable.
+            if roundoff > 1e-13 * (sum.abs() + tail) {
+                return None;
+            }
         }
     }
     None
@@ -410,18 +410,20 @@ fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
         if !sum.hi.is_finite() || !absolute_sum.is_finite() {
             return None;
         }
-        if term.hi.abs() > 1e-25 * sum.hi.abs() {
+        if term.hi.abs() > 1e-13 * sum.hi.abs() {
             continue;
         }
         let next_a = a.add_f64(kf + 1.0).hi;
         let next_b = b + kf + 1.0;
+        if next_a <= 0.0 || next_b <= 0.0 {
+            continue;
+        }
         let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
-        if next_a > 0.0
-            && next_b > 0.0
-            && ratio_bound < 0.5
-            && term.hi.abs() <= 1e-25 * sum.hi.abs()
-        {
-            return (absolute_sum * 1e-29 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        if ratio_bound < 0.5 {
+            let tail = (term.hi.abs() + term.lo.abs()) * ratio_bound / (1.0 - ratio_bound);
+            if absolute_sum * 1e-29 + tail <= 1e-13 * sum.hi.abs() {
+                return Some(sum.hi + sum.lo);
+            }
         }
     }
     None
