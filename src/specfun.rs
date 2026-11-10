@@ -527,6 +527,54 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
     return y;
 }
 
+// Binary64 defining series with a first-order rounding-error certificate.
+// Each term carries at most about 8(k+1) roundings relative to the exact
+// term and Neumaier summation keeps the accumulation error O(eps|sum|), so
+// 8 eps sum (k+1)|t_k| bounds the error. Accept only when that certificate
+// meets the same 1e-13 target as the DD kernel; otherwise fall back to DD.
+fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum, mut correction) = (1.0_f64, 1.0_f64, 0.0_f64);
+    let mut weighted = 1.0_f64;
+    let certify = |sum: f64, weighted: f64| {
+        (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum)
+    };
+    for k in 0..10000 {
+        let kf = k as f64;
+        let numerator = (a + kf) * (b + kf);
+        if numerator == 0.0 {
+            return certify(sum + correction, weighted);
+        }
+        term *= numerator * x / ((c + kf) * (kf + 1.0));
+        let next = sum + term;
+        correction += if sum.abs() >= term.abs() {
+            (sum - next) + term
+        } else {
+            (term - next) + sum
+        };
+        sum = next;
+        weighted += (kf + 2.0) * term.abs();
+        if !weighted.is_finite() || !sum.is_finite() {
+            return None;
+        }
+        // Since 0 <= bound, test the cheap necessary size condition before
+        // forming the tail-ratio bound and its divisions.
+        if term.abs() > 0.5 * f64::EPSILON * sum.abs() {
+            continue;
+        }
+        let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
+        let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
+        if an > 0.0
+            && bn > 0.0
+            && cn > 0.0
+            && bound < 1.0
+            && term.abs() <= 0.5 * f64::EPSILON * (1.0 - bound) * sum.abs()
+        {
+            return certify(sum + correction, weighted);
+        }
+    }
+    None
+}
+
 // Mixed-sign defining series in DD. In particular, near x=1 a negative
 // numerator can cancel many digits before its positive tail converges.
 fn hys2f1_dd(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
@@ -541,11 +589,14 @@ fn hys2f1_dd(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         }
         term = (term * numerator)
             .mul_f64(x)
-            .div_dd(Dd::sum(c, kf).mul_f64(kf + 1.0));
+            .div_dd(Dd::sum(c, kf).mul_small(kf + 1.0));
         sum = sum + term;
         absolute_sum += term.hi.abs();
         if !sum.hi.is_finite() || !absolute_sum.is_finite() {
             return None;
+        }
+        if term.hi.abs() > 1e-25 * sum.hi.abs() {
+            continue;
         }
         let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
         // Each ratio is bounded by its current value or its limit one.
@@ -567,7 +618,7 @@ pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
         && a.abs().max(b.abs()).max(c.abs()) <= 128.0
         && x.abs() < 1.0
     {
-        if let Some(value) = hys2f1_dd(a, b, c, x) {
+        if let Some(value) = hys2f1_f64(a, b, c, x).or_else(|| hys2f1_dd(a, b, c, x)) {
             loss[0] = 1e-13;
             return value;
         }

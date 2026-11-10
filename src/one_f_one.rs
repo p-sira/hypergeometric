@@ -128,7 +128,9 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
         } else {
             Dd::from(a)
         };
-        if let Some(value) = signed_series(alpha, b, argument) {
+        if let Some(value) =
+            signed_series_f64(alpha.hi, b, argument).or_else(|| signed_series(alpha, b, argument))
+        {
             return scale * value;
         }
         // An uncertified alternating series must not fall back to the same
@@ -174,6 +176,45 @@ fn laguerre(degree: usize, b: f64, x: f64) -> f64 {
     }
 }
 
+// Binary64 pre-pass for `signed_series` with the same stopping rule. Each
+// term carries at most about 8(k+1) roundings (including rounding of `a`)
+// and Neumaier summation keeps accumulation error O(eps|sum|), so accept
+// only when 8 eps sum (k+1)|t_k| meets the DD kernel's 1e-13 target.
+fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum, mut correction) = (1.0_f64, 1.0_f64, 0.0_f64);
+    let mut weighted = 1.0_f64;
+    for k in 0..1000 {
+        let kf = k as f64;
+        term *= (a + kf) * x / ((b + kf) * (kf + 1.0));
+        let next = sum + term;
+        correction += if sum.abs() >= term.abs() {
+            (sum - next) + term
+        } else {
+            (term - next) + sum
+        };
+        sum = next;
+        weighted += (kf + 2.0) * term.abs();
+        if !sum.is_finite() || !weighted.is_finite() {
+            return None;
+        }
+        if term.abs() > 0.0625 * f64::EPSILON * sum.abs() {
+            continue;
+        }
+        let next_a = a + kf + 1.0;
+        let next_b = b + kf + 1.0;
+        let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
+        if next_a > 0.0
+            && next_b > 0.0
+            && ratio_bound < 0.5
+            && term.abs() <= 0.0625 * f64::EPSILON * sum.abs()
+        {
+            let sum = sum + correction;
+            return (8.0 * f64::EPSILON * weighted <= 1e-13 * sum.abs()).then_some(sum);
+        }
+    }
+    None
+}
+
 // Double-double defining series for mixed-sign rising factorials. Wait until
 // both parameters are positive and the remaining ratios are bounded by 1/2;
 // a tiny term before a nearby numerator zero does not bound the later tail.
@@ -184,11 +225,14 @@ fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
         let kf = k as f64;
         term = (term * a.add_f64(kf))
             .mul_f64(x)
-            .div_dd(Dd::sum(b, kf).mul_f64(kf + 1.0));
+            .div_dd(Dd::sum(b, kf).mul_small(kf + 1.0));
         sum = sum + term;
         absolute_sum += term.hi.abs();
         if !sum.hi.is_finite() || !absolute_sum.is_finite() {
             return None;
+        }
+        if term.hi.abs() > 1e-25 * sum.hi.abs() {
+            continue;
         }
         let next_a = a.add_f64(kf + 1.0).hi;
         let next_b = b + kf + 1.0;
