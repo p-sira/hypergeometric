@@ -200,49 +200,45 @@ fn real_kernel(v: f64, z: f64) -> Result<f64, StrErr> {
     if z == 0.0 {
         return Ok(1.0);
     }
-    // Half-integer parameters reduce exactly to elementary trigonometric
-    // functions. These identities remain stable at zeros where the general
-    // alternating series cannot certify any relative accuracy.
-    if v == 0.5 {
-        let root = z.abs().sqrt();
+    // Correct the phase before evaluating all elementary half-integer
+    // identities. Rounding sqrt(-z) alone can lose the sign near a zero.
+    if z < 0.0 && matches!(v, -0.5 | 0.5 | 1.5) {
+        let root = (-z).sqrt();
         let t = 2.0 * root;
-        return Ok(if z > 0.0 {
-            t.cosh()
+        let delta = (-root).mul_add(root, -z) / root;
+        let (mut sin, mut cos) = t.sin_cos();
+        if delta.abs() <= 0.125 {
+            let (sd, cd) = delta.sin_cos();
+            (sin, cos) = (sin.mul_add(cd, cos * sd), cos.mul_add(cd, -sin * sd));
+        }
+        return Ok(if v == 0.5 {
+            cos
+        } else if v == 1.5 {
+            sin / t
         } else {
-            // Near a cosine zero, rounding sqrt(-z) before evaluating cos
-            // loses the entire result. Recover the low part of the root via
-            // (-z) - root², computed with fused multiply-add, and correct
-            // cos to first order. The omitted term is O(ulp(root)²).
-            let root_correction = (-root).mul_add(root, -z) / root;
-            // At enormous |z| the spacing between successive f64 roots is
-            // larger than a radian, so a linear phase correction is invalid.
-            // Return the bounded trigonometric value in that regime.
-            if root_correction.abs() <= 0.125 {
-                t.cos() - t.sin() * root_correction
-            } else {
-                t.cos()
-            }
+            t.mul_add(sin, cos) + delta * sin
         });
     }
+    if v == 0.5 {
+        return Ok((2.0 * z.sqrt()).cosh());
+    }
     if v == 1.5 {
-        let t = 2.0 * z.abs().sqrt();
-        return Ok(if z > 0.0 {
-            if t > 700.0 {
-                // sinh(t) overflows before sinh(t)/t does.
-                (t - (2.0 * t).ln()).exp()
-            } else {
-                t.sinh() / t
-            }
+        let t = 2.0 * z.sqrt();
+        return Ok(if t > 700.0 {
+            // sinh(t) overflows before sinh(t)/t does.
+            (t - (2.0 * t).ln()).exp()
         } else {
-            t.sin() / t
+            t.sinh() / t
         });
     }
     if v == -0.5 {
-        let t = 2.0 * z.abs().sqrt();
-        return Ok(if z > 0.0 {
-            t.cosh() - t * t.sinh()
+        let t = 2.0 * z.sqrt();
+        return Ok(if t > 350.0 {
+            // cosh(t)-t*sinh(t) = -exp(t)*(t-1)/2 to binary64
+            // precision here. Avoid infinity minus infinity on overflow.
+            -(t + (t - 1.0).ln() - std::f64::consts::LN_2).exp()
         } else {
-            t.cos() + t * t.sin()
+            t.cosh() - t * t.sinh()
         });
     }
     // Large negative arguments with |z| > v have strongly alternating

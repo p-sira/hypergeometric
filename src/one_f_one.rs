@@ -1,5 +1,7 @@
 //! Sci legacy confluent hypergeometric dispatcher and Kummer continuation.
 //! Adapted from sci-special's pure Rust implementation. See crate LICENSE.
+use crate::dd::Dd;
+
 pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     if !a.is_finite() || !b.is_finite() || !x.is_finite() || a.abs() > 100_000.0 {
         return f64::NAN;
@@ -38,22 +40,16 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
         };
         return sign * (x + log_factor).exp();
     }
-    // Nonpositive integer a terminates the defining hypergeometric series.
-    // Evaluating that polynomial directly avoids the gamma poles introduced
-    // by the general asymptotic formulas for negative x.
+    // M(-n,b,x) is a normalized Laguerre polynomial. Its defining sum
+    // can cancel tens of digits; the three-term recurrence avoids those
+    // enormous alternating terms. DD also preserves accuracy near zeros.
     if a < 0.0 && a == a.floor() {
-        let (mut term, mut sum) = (1.0, 1.0);
-        for k in 0..(-a) as usize {
-            let k = k as f64;
-            term *= (a + k) * x / ((b + k) * (k + 1.0));
-            sum += term;
-        }
-        return sum;
+        return laguerre((-a) as usize, b, x);
     }
     // The Kummer-transformed series still has catastrophic cancellation when
     // b-a is large and negative. Continue the analytic solution outwards instead
     // of summing exponentially larger alternating terms at the target.
-    if a > 0.0 && b < a && (-1000.0..0.0).contains(&x) && (-8.0..=64.0).contains(&b) {
+    if a > 0.0 && b < a && (-1000.0..0.0).contains(&x) && (-64.0..=64.0).contains(&b) {
         if b > 0.0 && a <= 64.0 && x >= -12.0 {
             // The transformed series can still be cheap at small |x|.
             // Certify its cancellation before accepting it: near zeros, or
@@ -127,20 +123,85 @@ pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
                 }
             }
         }
-        let (mut term, mut sum, mut correction) = (1.0, 1.0, 0.0);
-        for k in 0..1000 {
-            let k = k as f64;
-            term *= (alpha + k) * argument / ((b + k) * (k + 1.0));
-            let adjusted = term - correction;
-            let next = sum + adjusted;
-            correction = (next - sum) - adjusted;
-            sum = next;
-            if term.abs() <= f64::EPSILON * sum.abs() {
-                return scale * sum;
-            }
+        let alpha = if x < 0.0 {
+            Dd::from(b) - Dd::from(a)
+        } else {
+            Dd::from(a)
+        };
+        if let Some(value) = signed_series(alpha, b, argument) {
+            return scale * value;
         }
+        // An uncertified alternating series must not fall back to the same
+        // binary64 sum in the legacy kernel.
+        return f64::NAN;
     }
     crate::specfun::chgm(x, a, b)
+}
+
+// Normalized Laguerre recurrence, with common binary rescaling so a large
+// intermediate cannot overflow before division by b+n.
+fn laguerre(degree: usize, b: f64, x: f64) -> f64 {
+    let ratio = x / b;
+    if !ratio.is_finite() {
+        return if degree == 1 { 1.0 - ratio } else { f64::NAN };
+    }
+    let (mut previous, mut current) = (Dd::from(1.0), Dd::from(1.0) - Dd::from(x) / Dd::from(b));
+    let mut exponent = 0;
+    for n in 1..degree {
+        let nf = n as f64;
+        let denominator = Dd::sum(b, nf);
+        let factor = Dd::from(1.0) + Dd::sum(nf, -x).div_dd(denominator);
+        let previous_factor = Dd::from(nf).div_dd(denominator);
+        let coefficient = factor.hi.abs().max(previous_factor.hi.abs()).max(1.0);
+        if !coefficient.is_finite() {
+            return f64::NAN;
+        }
+        while current.hi.abs().max(previous.hi.abs()) > 1e280 / coefficient {
+            let scale = 2.0_f64.powi(-512);
+            previous = previous.mul_f64(scale);
+            current = current.mul_f64(scale);
+            exponent += 512;
+        }
+        let next = factor * current - previous_factor * previous;
+        previous = current;
+        current = next;
+    }
+    let value = current.hi + current.lo;
+    if exponent == 0 {
+        value
+    } else {
+        value.signum() * (value.abs().ln() + f64::from(exponent) * std::f64::consts::LN_2).exp()
+    }
+}
+
+// Double-double defining series for mixed-sign rising factorials. Wait until
+// both parameters are positive and the remaining ratios are bounded by 1/2;
+// a tiny term before a nearby numerator zero does not bound the later tail.
+fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
+    let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
+    let mut absolute_sum = 1.0;
+    for k in 0..1000 {
+        let kf = k as f64;
+        term = (term * a.add_f64(kf))
+            .mul_f64(x)
+            .div_dd(Dd::sum(b, kf).mul_f64(kf + 1.0));
+        sum = sum + term;
+        absolute_sum += term.hi.abs();
+        if !sum.hi.is_finite() || !absolute_sum.is_finite() {
+            return None;
+        }
+        let next_a = a.add_f64(kf + 1.0).hi;
+        let next_b = b + kf + 1.0;
+        let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
+        if next_a > 0.0
+            && next_b > 0.0
+            && ratio_bound < 0.5
+            && term.hi.abs() <= 1e-25 * sum.hi.abs()
+        {
+            return (absolute_sum * 1e-29 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

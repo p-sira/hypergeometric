@@ -108,7 +108,10 @@ pub fn hyperu(a: f64, b: f64, z: f64) -> f64 {
     if z == 0.0 {
         // U(-n,b,z)=(-1)^n n! L_n^(b-1)(z), so its endpoint value
         // is the terminating polynomial (-1)^n (b)_n, including b>=1.
-        if a < 0.0 && a == a.floor() && -a <= 4096.0 {
+        if a < 0.0 && a == a.floor() {
+            if b <= 0.0 && b == b.floor() && -b < -a {
+                return 0.0;
+            }
             let mut value = 1.0;
             for k in 0..(-a) as usize {
                 value *= -(b + k as f64);
@@ -116,11 +119,15 @@ pub fn hyperu(a: f64, b: f64, z: f64) -> f64 {
             return value;
         }
         if b >= 1.0 {
-            return f64::INFINITY;
+            return gamma::lgamma_sign(a).1 * f64::INFINITY;
         }
         // Gamma(1-b)/Gamma(1+a-b); reciprocal gamma preserves removable
         // denominator poles as exactly zero for a negative integer.
-        return gamma::gamma(1.0 - b) * gamma::rgamma(1.0 + a - b);
+        let denominator = 1.0 + a - b;
+        if denominator <= 0.0 && denominator == denominator.floor() {
+            return 0.0;
+        }
+        return gamma::gamma_ratio(1.0 - b, denominator, 0.0);
     }
     if b == 0.0
         && a > 0.0

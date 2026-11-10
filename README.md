@@ -35,4 +35,6 @@ let w: f64 = wrightomega(0.0); // 0.5671432904097838
 
 `hyp0f1` and `wrightomega` accept both `f32` and `f64` through `num_traits::Float`; they evaluate in `f64` and return the input type. The remaining functions use `f64`. All functions operate on real arguments; complex continuation is not supported. Invalid inputs and unresolved numerical regions may return `NaN`, while poles or overflow may produce infinities. The crate uses `bessel` for large-argument 0F1 continuation. 
 
-For the full accuracy report, see [sci-testing](https://github.com/p-sira/sci-testing/blob/main/docs/accuracy/special.md#scispecialhypergeometric), since [sci-special](https://github.com/p-sira/sci/tree/main/crates/sci-special) re-exports related implementations from `hypergeometric`.
+For the independent high-precision grid, fixes, and remaining limits, see the [numerical accuracy audit](docs/accuracy-audit.md).
+
+For the related Sci accuracy report, see [sci-testing](https://github.com/p-sira/sci-testing/blob/main/docs/accuracy/special.md#scispecialhypergeometric), since [sci-special](https://github.com/p-sira/sci/tree/main/crates/sci-special) re-exports related implementations from `hypergeometric`.

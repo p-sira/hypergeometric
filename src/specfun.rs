@@ -61,23 +61,15 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
             return 1.0f64;
         }
     }
-    if ((a == ((-1) as f64)) && (c != ((0) as f64))) {
-        {
-            let mut result: f64 = (((1) as f64) - ((b / c) * x));
-            if ((result).abs() < 1e-15f64) {
-                {
-                    return 0.0f64;
-                }
-            }
-            return result;
-        }
+    if a == -1.0 && c != 0.0 {
+        return (-b / c).mul_add(x, 1.0);
     }
-    if ((a <= ((0) as f64)) && ((a - ia).abs() < HYP2F1_EPS)) {
+    if ((a <= ((0) as f64)) && (a == ia)) {
         {
             neg_int_a = 1;
         }
     }
-    if ((b <= ((0) as f64)) && ((b - ib).abs() < HYP2F1_EPS)) {
+    if ((b <= ((0) as f64)) && (b == ib)) {
         {
             neg_int_b = 1;
         }
@@ -94,7 +86,7 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
     }
     if ((ax < 1.0f64) || (x == (-1.0f64))) {
         {
-            if ((b - c).abs() < HYP2F1_EPS) {
+            if (b == c) {
                 {
                     if (neg_int_b != 0) {
                         {
@@ -108,18 +100,19 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
                     return y;
                 }
             }
-            if ((a - c).abs() < HYP2F1_EPS) {
-                {
-                    y = (s).powf((-b));
-                    return y;
-                }
+            if (a == c) {
+                return if neg_int_a != 0 {
+                    hyp2f1_neg_c_equal_bc(b, a, x)
+                } else {
+                    s.powf(-b)
+                };
             }
         }
     }
     if (c <= 0.0f64) {
         {
             ic = (c).round();
-            if ((c - ic).abs() < HYP2F1_EPS) {
+            if (c == ic) {
                 {
                     if ((neg_int_a != 0) && (ia > ic)) {
                         return hyt2f1(a, b, c, x, std::slice::from_mut(&mut err));
@@ -134,6 +127,15 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
     }
     if ((neg_int_a != 0) || (neg_int_b != 0)) {
         return hyt2f1(a, b, c, x, std::slice::from_mut(&mut err));
+    }
+    // Pfaff's transformation avoids subtracting the large coefficients
+    // of the connection at 1/x. Mixed-sign series use the DD kernel below.
+    // Bound x so rounding x/(x-1) cannot erase its distance from one.
+    if (-10000.0..-1.0).contains(&x) {
+        if a.abs() < b.abs() {
+            return s.powf(-a) * hyp2f1(a, c - b, c, x / (x - 1.0));
+        }
+        return s.powf(-b) * hyp2f1(c - a, b, c, x / (x - 1.0));
     }
     t1 = (b - a).abs();
     if ((x < (-2.0f64)) && ((t1 - (t1).round()).abs() > HYP2F1_EPS)) {
@@ -187,7 +189,7 @@ pub(super) fn hyp2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64) -> f64 {
     }
     id = (d).round();
     q = (d - id).abs();
-    if ((ax - 1.0f64).abs() < HYP2F1_EPS) {
+    if (ax == 1.0) {
         {
             if (x > 0.0f64) {
                 {
@@ -318,12 +320,12 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
     let mut neg_int_b: i32 = 0;
     ia = (((a).round()) as i32);
     ib = (((b).round()) as i32);
-    if ((a <= ((0) as f64)) && ((a - ((ia) as f64)).abs() < HYP2F1_EPS)) {
+    if ((a <= ((0) as f64)) && (a == ia as f64)) {
         {
             neg_int_a = 1;
         }
     }
-    if ((b <= ((0) as f64)) && ((b - ((ib) as f64)).abs() < HYP2F1_EPS)) {
+    if ((b <= ((0) as f64)) && (b == ib as f64)) {
         {
             neg_int_b = 1;
         }
@@ -525,7 +527,51 @@ pub(super) fn hyt2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
     return y;
 }
 
+// Mixed-sign defining series in DD. In particular, near x=1 a negative
+// numerator can cancel many digits before its positive tail converges.
+fn hys2f1_dd(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
+    use crate::dd::Dd;
+    let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
+    let mut absolute_sum = 1.0;
+    for k in 0..10000 {
+        let kf = k as f64;
+        let numerator = Dd::sum(a, kf) * Dd::sum(b, kf);
+        if numerator.hi == 0.0 && numerator.lo == 0.0 {
+            return (absolute_sum * 1e-28 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        }
+        term = (term * numerator)
+            .mul_f64(x)
+            .div_dd(Dd::sum(c, kf).mul_f64(kf + 1.0));
+        sum = sum + term;
+        absolute_sum += term.hi.abs();
+        if !sum.hi.is_finite() || !absolute_sum.is_finite() {
+            return None;
+        }
+        let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
+        // Each ratio is bounded by its current value or its limit one.
+        let bound = x.abs() * (an / cn).max(1.0) * (bn / (kf + 2.0)).max(1.0);
+        if an > 0.0
+            && bn > 0.0
+            && cn > 0.0
+            && bound < 1.0
+            && term.hi.abs() <= 1e-25 * (1.0 - bound) * sum.hi.abs()
+        {
+            return (absolute_sum * 1e-28 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
+        }
+    }
+    None
+}
+
 pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut [f64]) -> f64 {
+    if (a < 0.0 || b < 0.0 || c < 0.0 || x < 0.0)
+        && a.abs().max(b.abs()).max(c.abs()) <= 128.0
+        && x.abs() < 1.0
+    {
+        if let Some(value) = hys2f1_dd(a, b, c, x) {
+            loss[0] = 1e-13;
+            return value;
+        }
+    }
     let mut f: f64 = 0.0;
     let mut g: f64 = 0.0;
     let mut h: f64 = 0.0;
@@ -545,7 +591,7 @@ pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
         }
     }
     ib = (((b).round()) as i32);
-    if ((((b - ((ib) as f64)).abs() < HYP2F1_EPS) && (ib <= 0)) && ((b).abs() < (a).abs())) {
+    if (((b == ib as f64) && (ib <= 0)) && ((b).abs() < (a).abs())) {
         {
             f = b;
             b = a;
@@ -571,7 +617,7 @@ pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
     k = 0.0f64;
     loop {
         {
-            if ((h).abs() < HYP2F1_EPS) {
+            if (h == 0.0) {
                 {
                     loss[0] = 1.0f64;
                     return f64::INFINITY;
