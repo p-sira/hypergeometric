@@ -2,6 +2,15 @@
 
 ## 0.1.2
 
+### Fixed
+
+Fix numerical accuracy issues affecting 0.1.1 ([#6](https://github.com/p-sira/hypergeometric/pull/6)):
+
+- `hyp0f1`: improve half-integer results near zeros and avoid spurious NaN on overflow.
+- `hyp1f1`: correct cancellation errors for negative numerator parameters, including terminating polynomials.
+- `hyp2f1`: correct near-pole and endpoint handling, negative-argument continuation, and termination with equal negative numerator and denominator parameters.
+- `hyperu`: correct signs, preserve exact zeros, and avoid intermediate gamma overflow at zero argument.
+
 ### Performance
 
 - Speed up `hyp2f1` continuation for integer parameter differences and noninteger cases near 1 ([#5](https://github.com/p-sira/hypergeometric/pull/5)).
