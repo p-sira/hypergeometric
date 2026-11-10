@@ -591,6 +591,13 @@ fn hys2f1_positive_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         if !sum.is_finite() || !weighted.is_finite() {
             return None;
         }
+        // For positive terms, weighted / sum is a running weighted average
+        // of k+1 and can only increase. Once this necessary roundoff bound
+        // exceeds the error budget, no later terms can certify the sum.
+        // Return to the existing continuation rather than summing to 10000.
+        if 8.0 * f64::EPSILON * weighted > 1e-13 * sum {
+            return None;
+        }
         let target = 1e-13 * sum;
         if term > target {
             continue;
@@ -652,7 +659,10 @@ pub(super) fn hys2f1(mut a: f64, mut b: f64, mut c: f64, mut x: f64, loss: &mut 
             return value;
         }
     }
-    if a > 0.0 && b > 0.0 && c > 0.0 && x >= 0.0 && x < 1.0 && a.max(b).max(c) <= 128.0 {
+    // The certified positive series is intended for rapidly convergent
+    // arguments. As x approaches one, its geometric tail decays too slowly
+    // for the roundoff budget, so use the existing continuation instead.
+    if a > 0.0 && b > 0.0 && c > 0.0 && (0.0..0.75).contains(&x) && a.max(b).max(c) <= 128.0 {
         if let Some(value) = hys2f1_positive_f64(a, b, c, x) {
             loss[0] = 1e-13;
             return value;
