@@ -1,12 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
 ### Performance
 
-- Reuse exact split multipliers in bounded double-double series for `hyp0f1`, `hyp1f1`, and `hyp2f1`, retaining FMA arithmetic outside the safe magnitude range.
-- Stop binary64 series prepasses once the accumulated rounding error and geometric tail bound rule out certification; retain the existing higher-precision fallbacks.
-- Use exact small-integer products for `hyp0f1` series denominators with safely bounded leading parts.
+- Reduce series evaluation overhead in `hyp0f1`, `hyp1f1`, and `hyp2f1` while retaining accuracy safeguards ([#9](https://github.com/p-sira/hypergeometric/pull/9)).
 
 ## 0.1.4
 
