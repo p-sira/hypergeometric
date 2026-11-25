@@ -74,15 +74,22 @@ impl DdFactor {
 
 /// Reuse a split binary64 multiplier in a series when both leading parts
 /// are safely bounded. Outside this range retain the FMA-based product.
+/// The bounds keep both split products and their residuals well inside the
+/// binary64 normal exponent range, even when both operands are at an endpoint.
 #[derive(Clone, Copy)]
 pub(crate) enum SeriesFactor {
     Split(DdFactor),
     Fma(f64),
 }
+#[inline]
+pub(crate) fn split_safe(value: f64) -> bool {
+    (1e-100..=1e100).contains(&value.abs())
+}
+
 impl SeriesFactor {
     #[inline]
     pub(crate) fn new(value: f64) -> Self {
-        if (1e-100..=1e100).contains(&value.abs()) {
+        if split_safe(value) {
             Self::Split(DdFactor::new(Dd::from(value)))
         } else {
             Self::Fma(value)
@@ -91,9 +98,7 @@ impl SeriesFactor {
     #[inline(always)]
     pub(crate) fn product_error(self, value: f64, product: f64) -> f64 {
         match self {
-            Self::Split(factor) if (1e-100..=1e100).contains(&value.abs()) => {
-                factor.product_error(value, product)
-            }
+            Self::Split(factor) if split_safe(value) => factor.product_error(value, product),
             Self::Split(factor) => value.mul_add(factor.value.hi, -product),
             Self::Fma(factor) => value.mul_add(factor, -product),
         }
@@ -101,7 +106,7 @@ impl SeriesFactor {
     #[inline(always)]
     pub(crate) fn mul(self, term: Dd) -> Dd {
         match self {
-            Self::Split(factor) if (1e-100..=1e100).contains(&term.hi.abs()) => factor.mul(term),
+            Self::Split(factor) if split_safe(term.hi) => factor.mul(term),
             Self::Split(factor) => term.mul_f64(factor.value.hi),
             Self::Fma(value) => term.mul_f64(value),
         }
@@ -249,7 +254,7 @@ impl Div for Dd {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dd, SeriesFactor};
+    use super::{Dd, SeriesFactor, split_safe};
 
     #[test]
     fn fixed_series_factor_preserves_product_residual() {
@@ -285,6 +290,36 @@ mod tests {
                 let reference = term.mul_f64(x);
                 assert_eq!(actual.hi, reference.hi);
                 assert_eq!(actual.lo, reference.lo);
+            }
+        }
+    }
+
+    #[test]
+    fn split_products_across_exponents_match_fma() {
+        // Deterministic mantissas and exponents, independently of any
+        // particular hypergeometric parameter or benchmark input.
+        let mut seed = 0x9e3779b97f4a7c15_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let exponent = 691 + ((seed >> 52) & 0x7ff) % 665;
+            f64::from_bits((seed & 0x800f_ffff_ffff_ffff) | (exponent << 52))
+        };
+        for k in 1..=4096 {
+            let (a, b) = (next(), next());
+            let term = Dd::sum(a, a * 1e-17);
+            let factor = SeriesFactor::new(b);
+            let product = term.hi * b;
+            assert_eq!(
+                factor.product_error(term.hi, product),
+                term.hi.mul_add(b, -product)
+            );
+            let actual = factor.mul(term);
+            let reference = term.mul_f64(b);
+            assert_eq!((actual.hi, actual.lo), (reference.hi, reference.lo));
+            if split_safe(term.hi) {
+                let actual = term.mul_small(f64::from(k));
+                let reference = term.mul_f64(f64::from(k));
+                assert_eq!((actual.hi, actual.lo), (reference.hi, reference.lo));
             }
         }
     }

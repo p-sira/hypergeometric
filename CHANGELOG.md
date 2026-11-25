@@ -6,7 +6,7 @@
 
 - Reuse exact split multipliers in bounded double-double series for `hyp0f1`, `hyp1f1`, and `hyp2f1`, retaining FMA arithmetic outside the safe magnitude range.
 - Stop binary64 series prepasses once the accumulated rounding error and geometric tail bound rule out certification; retain the existing higher-precision fallbacks.
-- Use exact small-integer products for bounded positive `hyp0f1` series denominators.
+- Use exact small-integer products for `hyp0f1` series denominators with safely bounded leading parts.
 
 ## 0.1.4
 

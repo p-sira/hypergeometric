@@ -8,8 +8,7 @@ fn check(actual: f64, expected: f64, tolerance: f64) {
 }
 
 // Independent 145-digit Decimal defining series evaluated at exact binary64
-// inputs. Includes cancellation, positive series, and both sides of the
-// bounded small-integer denominator dispatch.
+// inputs. Includes cancellation, positive series and fractional parameters.
 #[test]
 fn zero_f_one_bounded_series() {
     for (b, z, expected) in [
@@ -20,6 +19,25 @@ fn zero_f_one_bounded_series() {
         (0.24999999999999997, 9.0, 527.676263893479),
         (128.0, -100.0, 0.4567427874589717),
         (128.00000000000003, -100.0, 0.4567427874589718),
+    ] {
+        check(hyp0f1(b, z), expected, 1e-13);
+    }
+}
+
+#[test]
+fn zero_f_one_broad_parameter_magnitudes() {
+    // mpmath at 100 decimal digits, using exact binary64 inputs. Exercise
+    // negative parameters, small and large positive parameters, and the
+    // FMA fallback beyond the safe magnitude bounds.
+    for (b, z, expected) in [
+        (-0.25, 2.0, -22.553598186985347),
+        (-1.75, -3.5, -2.8504233386201547),
+        (-20.125, 15.0, 0.48115987679956584),
+        (0.01, -4.0, 11.611824708735702),
+        (1000.0, -3000.0, 0.0495628582202855),
+        (0.125, 60.0, 24066118.19869319),
+        (1e-110, 1e-112, 1.01),
+        (1e110, 1e110, std::f64::consts::E),
     ] {
         check(hyp0f1(b, z), expected, 1e-13);
     }

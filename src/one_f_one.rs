@@ -1,6 +1,6 @@
 //! Sci legacy confluent hypergeometric dispatcher and Kummer continuation.
 //! Adapted from sci-special's pure Rust implementation. See crate LICENSE.
-use crate::dd::{Dd, SeriesFactor, small_product_error};
+use crate::dd::{Dd, SeriesFactor, small_product_error, split_safe};
 
 pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     if !a.is_finite() || !b.is_finite() || !x.is_finite() || a.abs() > 100_000.0 {
@@ -423,10 +423,8 @@ fn signed_series_twofold(a: Dd, b: f64, x: f64) -> Option<f64> {
         }
         let numerator_low =
             factor.product_error(numerator_factor.hi, numerator) + numerator_factor.lo * x;
-        // k is an exact small integer. The denominator magnitude check
-        // above keeps its residual far from underflow; guard splitting
-        // against overflow for any future callers with large b.
-        let denominator_error = if b <= 1e270 {
+        // k is an exact small integer; split only for bounded operands.
+        let denominator_error = if split_safe(denominator_factor.hi) {
             small_product_error(denominator_factor.hi, next_k, denominator)
         } else {
             denominator_factor.hi.mul_add(next_k, -denominator)

@@ -1,6 +1,6 @@
 //! Confluent limit function, compensated and double-double power series.
 use crate::{
-    dd::{Dd, SeriesFactor},
+    dd::{Dd, SeriesFactor, split_safe},
     gamma,
 };
 type StrErr = &'static str;
@@ -29,13 +29,14 @@ pub(super) fn series_real<const FULL_PRECISION: bool>(v: f64, z: f64) -> Option<
     let (mut positive, mut negative) = (real, Dd::from(0.0));
     let mut peak: f64 = 1.0;
     let factor = SeriesFactor::new(z);
-    let small_denominator = (0.25..=128.0).contains(&v);
     for k in 1..=4096 {
         // term_k = term_(k-1) z / ((v + k - 1) k); v + k - 1 is exact in
         // double-double and the integer factor k needs no promotion.
         let kf = k as f64;
         let denominator = Dd::sum(v, kf - 1.0);
-        let denominator = if small_denominator {
+        // k is an exact small integer. Select the split product by the
+        // actual operand magnitude, not the original parameter range.
+        let denominator = if split_safe(denominator.hi) {
             denominator.mul_small(kf)
         } else {
             denominator.mul_f64(kf)

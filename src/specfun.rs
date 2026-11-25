@@ -571,7 +571,9 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
                 }
                 // The certified roundoff exceeds the budget even when the
                 // entire remaining tail is negligible: switch to DD now.
-                if roundoff > 1.01e-13 * (sum.abs() + tail)
+                // Avoid using an ill-conditioned geometric bound near one
+                // to reject the series earlier than the original check.
+                if (bound <= 0.99 && roundoff > 1.01e-13 * (sum.abs() + tail))
                     || (tail < 0.01 * target && roundoff > 1.01 * target)
                 {
                     return None;
