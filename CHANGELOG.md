@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+### Performance
+
+- Reduce series evaluation overhead in `hyp0f1`, `hyp1f1`, and `hyp2f1` while retaining accuracy safeguards ([#9](https://github.com/p-sira/hypergeometric/pull/9)).
+
 ## 0.1.4
 
 ### Performance

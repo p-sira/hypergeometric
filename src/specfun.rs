@@ -553,9 +553,10 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
         }
         let target = 1e-13 * sum.abs();
         let roundoff = 8.0 * f64::EPSILON * weighted;
-        // Use a conservative size screen to avoid tail-ratio divisions
-        // while the series terms are still relatively large.
-        if term.abs() > target {
+        // Usually wait for small terms before checking the tail. If roundoff
+        // already exceeds the budget, a tail bound may prove that no later
+        // partial sum can be certified.
+        if term.abs() > target && roundoff <= 1.01e-13 * (sum.abs() + term.abs()) {
             continue;
         }
         let (an, bn, cn) = (a + kf + 1.0, b + kf + 1.0, c + kf + 1.0);
@@ -570,7 +571,11 @@ fn hys2f1_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
                 }
                 // The certified roundoff exceeds the budget even when the
                 // entire remaining tail is negligible: switch to DD now.
-                if tail < 0.01 * target && roundoff > 1.01 * target {
+                // Avoid using an ill-conditioned geometric bound near one
+                // to reject the series earlier than the original check.
+                if (bound <= 0.99 && roundoff > 1.01e-13 * (sum.abs() + tail))
+                    || (tail < 0.01 * target && roundoff > 1.01 * target)
+                {
                     return None;
                 }
             }
@@ -616,17 +621,18 @@ fn hys2f1_positive_f64(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
 // Mixed-sign defining series in DD. In particular, near x=1 a negative
 // numerator can cancel many digits before its positive tail converges.
 fn hys2f1_dd(a: f64, b: f64, c: f64, x: f64) -> Option<f64> {
-    use crate::dd::Dd;
+    use crate::dd::{Dd, SeriesFactor};
     let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
     let mut absolute_sum = 1.0;
+    let factor = SeriesFactor::new(x);
     for k in 0..10000 {
         let kf = k as f64;
         let numerator = Dd::sum(a, kf) * Dd::sum(b, kf);
         if numerator.hi == 0.0 && numerator.lo == 0.0 {
             return (absolute_sum * 1e-28 <= 1e-13 * sum.hi.abs()).then_some(sum.hi + sum.lo);
         }
-        term = (term * numerator)
-            .mul_f64(x)
+        term = factor
+            .mul(term * numerator)
             .div_dd(Dd::sum(c, kf).mul_small(kf + 1.0));
         sum = sum + term;
         absolute_sum += term.hi.abs();
