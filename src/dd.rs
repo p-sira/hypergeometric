@@ -55,10 +55,14 @@ impl DdFactor {
         Self { value, hi, lo }
     }
     #[inline(always)]
+    fn product_error(self, a: f64, p: f64) -> f64 {
+        let (hi, lo) = split(a);
+        ((hi * self.hi - p) + hi * self.lo + lo * self.hi) + lo * self.lo
+    }
+    #[inline(always)]
     pub(crate) fn mul(self, a: Dd) -> Dd {
         let p = a.hi * self.value.hi;
-        let (hi, lo) = split(a.hi);
-        let error = ((hi * self.hi - p) + hi * self.lo + lo * self.hi) + lo * self.lo;
+        let error = self.product_error(a.hi, p);
         let lo = error + (a.hi * self.value.lo + a.lo * self.value.hi);
         let sum = p + lo;
         Dd {
@@ -66,6 +70,50 @@ impl DdFactor {
             lo: lo - (sum - p),
         }
     }
+}
+
+/// Reuse a split binary64 multiplier in a series when both leading parts
+/// are safely bounded. Outside this range retain the FMA-based product.
+#[derive(Clone, Copy)]
+pub(crate) enum SeriesFactor {
+    Split(DdFactor),
+    Fma(f64),
+}
+impl SeriesFactor {
+    #[inline]
+    pub(crate) fn new(value: f64) -> Self {
+        if (1e-100..=1e100).contains(&value.abs()) {
+            Self::Split(DdFactor::new(Dd::from(value)))
+        } else {
+            Self::Fma(value)
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn product_error(self, value: f64, product: f64) -> f64 {
+        match self {
+            Self::Split(factor) if (1e-100..=1e100).contains(&value.abs()) => {
+                factor.product_error(value, product)
+            }
+            Self::Split(factor) => value.mul_add(factor.value.hi, -product),
+            Self::Fma(factor) => value.mul_add(factor, -product),
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn mul(self, term: Dd) -> Dd {
+        match self {
+            Self::Split(factor) if (1e-100..=1e100).contains(&term.hi.abs()) => factor.mul(term),
+            Self::Split(factor) => term.mul_f64(factor.value.hi),
+            Self::Fma(value) => term.mul_f64(value),
+        }
+    }
+}
+
+/// Exact product residual for an integer factor of magnitude < 2^26 and a
+/// bounded normal leading part, with no FMA dispatch.
+#[inline(always)]
+pub(crate) fn small_product_error(value: f64, n: f64, product: f64) -> f64 {
+    let (hi, lo) = split(value);
+    (hi * n - product) + lo * n
 }
 
 impl Dd {
@@ -120,8 +168,7 @@ impl Dd {
     #[inline(always)]
     pub(crate) fn mul_small(self, n: f64) -> Self {
         let p = self.hi * n;
-        let (hi, lo) = split(self.hi);
-        let lo = ((hi * n - p) + lo * n) + self.lo * n;
+        let lo = small_product_error(self.hi, n, p) + self.lo * n;
         let sum = p + lo;
         Self {
             hi: sum,
@@ -133,12 +180,10 @@ impl Dd {
     #[inline(always)]
     pub(crate) fn mul_div_small(self, numerator: f64, denominator: f64) -> Self {
         let product = self.hi * numerator;
-        let (hi, lo) = split(self.hi);
-        let error = ((hi * numerator - product) + lo * numerator) + self.lo * numerator;
+        let error = small_product_error(self.hi, numerator, product) + self.lo * numerator;
         let q = product / denominator;
         let p = q * denominator;
-        let (hi, lo) = split(q);
-        let remainder = (product - p) - ((hi * denominator - p) + lo * denominator);
+        let remainder = (product - p) - small_product_error(q, denominator, p);
         let correction = (remainder + error) / denominator;
         let hi = q + correction;
         Self {
@@ -153,8 +198,7 @@ impl Dd {
     pub(crate) fn div_small(self, n: f64) -> Self {
         let q = self.hi / n;
         let p = q * n;
-        let (hi, lo) = split(q);
-        let error = (hi * n - p) + lo * n;
+        let error = small_product_error(q, n, p);
         let correction = (((self.hi - p) - error) + self.lo) / n;
         let sum = q + correction;
         Self {
@@ -200,5 +244,48 @@ impl Div for Dd {
         let q = Dd::from(self.hi / rhs.hi);
         let residual = self - rhs * q;
         q + Dd::from((residual.hi + residual.lo) / rhs.hi)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Dd, SeriesFactor};
+
+    #[test]
+    fn fixed_series_factor_preserves_product_residual() {
+        // Compare against the hardware/library FMA residual, including
+        // subnormal operands and values outside the split-safe range.
+        for x in [
+            -1e100,
+            1e101,
+            1e-100,
+            1e-101,
+            0.0,
+            f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            -0.743356278913,
+        ] {
+            let factor = SeriesFactor::new(x);
+            for a in [
+                -1e100,
+                1e101,
+                1e-100,
+                1e-101,
+                f64::MIN_POSITIVE,
+                f64::from_bits(1),
+                1.8672581934,
+            ] {
+                let term = Dd::sum(a, a * 1e-17);
+                let product = term.hi * x;
+                assert_eq!(
+                    factor.product_error(term.hi, product),
+                    term.hi.mul_add(x, -product)
+                );
+                let actual = factor.mul(term);
+                let reference = term.mul_f64(x);
+                assert_eq!(actual.hi, reference.hi);
+                assert_eq!(actual.lo, reference.lo);
+            }
+        }
     }
 }

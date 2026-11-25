@@ -1,5 +1,8 @@
 //! Confluent limit function, compensated and double-double power series.
-use crate::{dd::Dd, gamma};
+use crate::{
+    dd::{Dd, SeriesFactor},
+    gamma,
+};
 type StrErr = &'static str;
 const ERROR: StrErr = "0F1 arguments must be finite; parameter cannot be a nonpositive integer";
 fn validate(v: f64) -> Result<(), StrErr> {
@@ -25,12 +28,19 @@ pub(super) fn series_real<const FULL_PRECISION: bool>(v: f64, z: f64) -> Option<
     // addition combines them at the end.
     let (mut positive, mut negative) = (real, Dd::from(0.0));
     let mut peak: f64 = 1.0;
+    let factor = SeriesFactor::new(z);
+    let small_denominator = (0.25..=128.0).contains(&v);
     for k in 1..=4096 {
         // term_k = term_(k-1) z / ((v + k - 1) k); v + k - 1 is exact in
         // double-double and the integer factor k needs no promotion.
         let kf = k as f64;
-        let denominator = Dd::sum(v, kf - 1.0).mul_f64(kf);
-        real = real.mul_f64(z).div_dd(denominator);
+        let denominator = Dd::sum(v, kf - 1.0);
+        let denominator = if small_denominator {
+            denominator.mul_small(kf)
+        } else {
+            denominator.mul_f64(kf)
+        };
+        real = factor.mul(real).div_dd(denominator);
         if real.hi >= 0.0 {
             positive = positive.add_same_sign(real);
         } else {
@@ -71,6 +81,7 @@ fn compensated_series(v: f64, z: f64) -> Option<f64> {
         return None;
     }
     let (mut term, mut sum, mut correction, mut weighted) = (1.0, 1.0, 0.0, 2.0);
+    let norm = z.abs();
     for k in 1..=256 {
         let kf = k as f64;
         term *= z / ((v + (kf - 1.0)) * kf);
@@ -83,10 +94,24 @@ fn compensated_series(v: f64, z: f64) -> Option<f64> {
         if !sum.is_finite() {
             return None;
         }
-        if (v + kf) * (kf + 1.0) > 2.0 * z.abs() && term.abs() <= 0.125 * f64::EPSILON * sum.abs() {
-            // gamma_(4k) <= (4k)*eps/(1-1024*eps), since k <= 256.
-            let error = f64::EPSILON * weighted / (1.0 - 1024.0 * f64::EPSILON) + 2.0 * term.abs();
-            return (error <= 16.0 * f64::EPSILON * sum.abs()).then_some(sum);
+        // For positive terms weighted/sum cannot decrease. For alternating
+        // terms, a ratio below 1/2 bounds all later terms by |term|.
+        // If even the largest possible future sum fails the roundoff bound,
+        // avoid completing a binary64 pass that must be rejected. The margin
+        // allows for rounding when estimating this impossibility.
+        if z > 0.0 && weighted > 16.16 * sum {
+            return None;
+        }
+        if (v + kf) * (kf + 1.0) > 2.0 * norm {
+            if term.abs() <= 0.125 * f64::EPSILON * sum.abs() {
+                // gamma_(4k) <= (4k)*eps/(1-1024*eps), since k <= 256.
+                let error =
+                    f64::EPSILON * weighted / (1.0 - 1024.0 * f64::EPSILON) + 2.0 * term.abs();
+                return (error <= 16.0 * f64::EPSILON * sum.abs()).then_some(sum);
+            }
+            if weighted > 16.16 * (sum.abs() + term.abs()) {
+                return None;
+            }
         }
     }
     None

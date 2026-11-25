@@ -1,6 +1,6 @@
 //! Sci legacy confluent hypergeometric dispatcher and Kummer continuation.
 //! Adapted from sci-special's pure Rust implementation. See crate LICENSE.
-use crate::dd::Dd;
+use crate::dd::{Dd, SeriesFactor, small_product_error};
 
 pub(crate) fn hyp1f1(a: f64, b: f64, x: f64) -> f64 {
     if !a.is_finite() || !b.is_finite() || !x.is_finite() || a.abs() > 100_000.0 {
@@ -370,7 +370,11 @@ fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
         if !sum.is_finite() || !weighted.is_finite() {
             return None;
         }
-        if term.abs() > 1e-13 * sum.abs() {
+        let target = 1e-13 * sum.abs();
+        let roundoff = 8.0 * f64::EPSILON * weighted;
+        // Check the tail early only when its bound could prove this pass
+        // cannot succeed, even if all remaining terms increase |sum|.
+        if term.abs() > target && roundoff <= 1.01e-13 * (sum.abs() + term.abs()) {
             continue;
         }
         let next_a = a + kf + 1.0;
@@ -381,8 +385,7 @@ fn signed_series_f64(a: f64, b: f64, x: f64) -> Option<f64> {
         let ratio_bound = x / (kf + 2.0) * (next_a / next_b).max(1.0);
         if ratio_bound < 0.5 {
             let tail = term.abs() * ratio_bound / (1.0 - ratio_bound);
-            let roundoff = 8.0 * f64::EPSILON * weighted;
-            if roundoff + tail <= 1e-13 * sum.abs() {
+            if roundoff + tail <= target {
                 return Some(sum);
             }
             // All subsequent terms fit inside this tail and weighted only
@@ -405,6 +408,7 @@ fn signed_series_twofold(a: Dd, b: f64, x: f64) -> Option<f64> {
     }
     let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
     let mut absolute_sum = 1.0;
+    let factor = SeriesFactor::new(x);
     for k in 0..128 {
         let kf = k as f64;
         let numerator_factor = Dd::sum(a.hi, kf);
@@ -417,9 +421,17 @@ fn signed_series_twofold(a: Dd, b: f64, x: f64) -> Option<f64> {
         if numerator.abs() < 1e-100 || denominator.abs() < 1e-100 {
             return None;
         }
-        let numerator_low = numerator_factor.hi.mul_add(x, -numerator) + numerator_factor.lo * x;
-        let denominator_low =
-            denominator_factor.hi.mul_add(next_k, -denominator) + denominator_factor.lo * next_k;
+        let numerator_low =
+            factor.product_error(numerator_factor.hi, numerator) + numerator_factor.lo * x;
+        // k is an exact small integer. The denominator magnitude check
+        // above keeps its residual far from underflow; guard splitting
+        // against overflow for any future callers with large b.
+        let denominator_error = if b <= 1e270 {
+            small_product_error(denominator_factor.hi, next_k, denominator)
+        } else {
+            denominator_factor.hi.mul_add(next_k, -denominator)
+        };
+        let denominator_low = denominator_error + denominator_factor.lo * next_k;
         let ratio = numerator / denominator;
         if !ratio.is_finite() || ratio.abs() < 1e-100 {
             return None;
@@ -478,10 +490,11 @@ fn signed_series_twofold(a: Dd, b: f64, x: f64) -> Option<f64> {
 fn signed_series(a: Dd, b: f64, x: f64) -> Option<f64> {
     let (mut term, mut sum) = (Dd::from(1.0), Dd::from(1.0));
     let mut absolute_sum = 1.0;
+    let factor = SeriesFactor::new(x);
     for k in 0..1000 {
         let kf = k as f64;
-        term = (term * a.add_f64(kf))
-            .mul_f64(x)
+        term = factor
+            .mul(term * a.add_f64(kf))
             .div_dd(Dd::sum(b, kf).mul_small(kf + 1.0));
         sum = sum + term;
         absolute_sum += term.hi.abs();
